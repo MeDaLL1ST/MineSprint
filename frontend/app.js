@@ -1,3 +1,4 @@
+/* frontend/app.js */
 const tg = window.Telegram?.WebApp;
 tg?.ready?.();
 tg?.expand?.();
@@ -9,6 +10,7 @@ const LONG_PRESS_MS = 380;
 const DRAG_THRESHOLD = 10;
 const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 2.8;
+const SPRING_PULL = 0.32;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -94,6 +96,7 @@ let panGesture = null;
 let pinchGesture = null;
 let mousePan = null;
 let suppressTapUntil = 0;
+let springFrame = 0;
 
 const activeTouchTimers = new Set();
 
@@ -229,7 +232,6 @@ function bindUI() {
   });
 
   els.fitZoomBtn.addEventListener("click", fitZoom);
-
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
 
   els.boardPreview.addEventListener("mouseleave", clearHoverCell);
@@ -589,7 +591,7 @@ function renderBoards() {
   renderBoardTo(els.boardModal, true);
 
   requestAnimationFrame(() => {
-    clampModalTransform();
+    clampToBoundsImmediate();
     applyModalTransform();
     applyHoverDecorations();
   });
@@ -684,7 +686,7 @@ function wireCellButton(btn, cellIndex) {
     (e) => {
       clearHoverCell();
 
-      if (btn._longPressTriggered || Date.now() < suppressTapUntil || pinchGesture) {
+      if (btn._longPressTriggered || Date.now() < suppressTapUntil || pinchGesture || (panGesture && panGesture.active)) {
         clearButtonTouchTimer(btn);
         btn._ignoreClickUntil = Date.now() + 500;
         e.preventDefault();
@@ -755,6 +757,8 @@ function clearHoverCell(silent = false) {
 function handleModalGestureStart(e) {
   if (!state || els.fieldModal.classList.contains("hidden")) return;
 
+  cancelSpring();
+
   if (e.touches.length === 2) {
     cancelAllTouchTimers();
     const rect = els.modalBoardScroll.getBoundingClientRect();
@@ -769,6 +773,7 @@ function handleModalGestureStart(e) {
     };
 
     panGesture = null;
+    setDragging(true);
     suppressTapUntil = Date.now() + 300;
     e.preventDefault();
     return;
@@ -805,6 +810,7 @@ function handleModalGestureMove(e) {
     }
 
     cancelAllTouchTimers();
+    setDragging(true);
 
     const rect = els.modalBoardScroll.getBoundingClientRect();
     const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left;
@@ -817,11 +823,11 @@ function handleModalGestureMove(e) {
     );
 
     modalScale = nextScale;
-    modalOffsetX = centerX - pinchGesture.boardX * modalScale;
-    modalOffsetY = centerY - pinchGesture.boardY * modalScale;
-    clampModalTransform();
-    applyModalTransform();
 
+    const rawX = centerX - pinchGesture.boardX * modalScale;
+    const rawY = centerY - pinchGesture.boardY * modalScale;
+
+    setOffsetsWithElastic(rawX, rawY);
     suppressTapUntil = Date.now() + 300;
     e.preventDefault();
     return;
@@ -835,14 +841,14 @@ function handleModalGestureMove(e) {
     if (!panGesture.active && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       panGesture.active = true;
       cancelAllTouchTimers();
+      setDragging(true);
       suppressTapUntil = Date.now() + 300;
     }
 
     if (panGesture.active) {
-      modalOffsetX = panGesture.startOffsetX + dx;
-      modalOffsetY = panGesture.startOffsetY + dy;
-      clampModalTransform();
-      applyModalTransform();
+      const rawX = panGesture.startOffsetX + dx;
+      const rawY = panGesture.startOffsetY + dy;
+      setOffsetsWithElastic(rawX, rawY);
       e.preventDefault();
     }
   }
@@ -855,6 +861,8 @@ function handleModalGestureEnd(e) {
     }
     panGesture = null;
     pinchGesture = null;
+    setDragging(false);
+    springBackToBounds();
     return;
   }
 
@@ -869,6 +877,7 @@ function handleModalGestureEnd(e) {
       active: false,
     };
     suppressTapUntil = Date.now() + 250;
+    setDragging(true);
   }
 }
 
@@ -876,6 +885,8 @@ function handleMousePanStart(e) {
   if (!state || els.fieldModal.classList.contains("hidden")) return;
   if (e.button !== 0) return;
   if (!e.target.closest(".board")) return;
+
+  cancelSpring();
 
   mousePan = {
     startX: e.clientX,
@@ -895,13 +906,13 @@ function handleMousePanMove(e) {
   if (!mousePan.active && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
     mousePan.active = true;
     suppressTapUntil = Date.now() + 250;
+    setDragging(true);
   }
 
   if (mousePan.active) {
-    modalOffsetX = mousePan.startOffsetX + dx;
-    modalOffsetY = mousePan.startOffsetY + dy;
-    clampModalTransform();
-    applyModalTransform();
+    const rawX = mousePan.startOffsetX + dx;
+    const rawY = mousePan.startOffsetY + dy;
+    setOffsetsWithElastic(rawX, rawY);
   }
 }
 
@@ -910,14 +921,62 @@ function handleMousePanEnd() {
     suppressTapUntil = Date.now() + 250;
   }
   mousePan = null;
+  setDragging(false);
+  springBackToBounds();
 }
 
 function touchesDistance(a, b) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 }
 
+function getModalMetrics() {
+  if (!els.modalStage || !els.modalBoardScroll) {
+    return { viewportW: 0, viewportH: 0, contentW: 0, contentH: 0 };
+  }
+
+  return {
+    viewportW: els.modalBoardScroll.clientWidth,
+    viewportH: els.modalBoardScroll.clientHeight,
+    contentW: els.modalStage.offsetWidth * modalScale,
+    contentH: els.modalStage.offsetHeight * modalScale,
+  };
+}
+
+function getModalBounds() {
+  const { viewportW, viewportH, contentW, contentH } = getModalMetrics();
+
+  const minX = contentW <= viewportW ? (viewportW - contentW) / 2 : viewportW - contentW;
+  const maxX = contentW <= viewportW ? (viewportW - contentW) / 2 : 0;
+
+  const minY = contentH <= viewportH ? (viewportH - contentH) / 2 : viewportH - contentH;
+  const maxY = contentH <= viewportH ? (viewportH - contentH) / 2 : 0;
+
+  return { minX, maxX, minY, maxY };
+}
+
+function applyResistance(value, min, max) {
+  if (value < min) return min + (value - min) * SPRING_PULL;
+  if (value > max) return max + (value - max) * SPRING_PULL;
+  return value;
+}
+
+function setOffsetsWithElastic(rawX, rawY) {
+  const bounds = getModalBounds();
+  modalOffsetX = applyResistance(rawX, bounds.minX, bounds.maxX);
+  modalOffsetY = applyResistance(rawY, bounds.minY, bounds.maxY);
+  applyModalTransform();
+}
+
+function clampToBoundsImmediate() {
+  const bounds = getModalBounds();
+  modalOffsetX = clamp(modalOffsetX, bounds.minX, bounds.maxX);
+  modalOffsetY = clamp(modalOffsetY, bounds.minY, bounds.maxY);
+}
+
 function zoomKeepingViewport(nextScale, anchor = null) {
   if (!state) return;
+
+  cancelSpring();
 
   const rect = els.modalBoardScroll.getBoundingClientRect();
   const anchorX = anchor?.x ?? rect.width / 2;
@@ -927,32 +986,56 @@ function zoomKeepingViewport(nextScale, anchor = null) {
   const boardY = (anchorY - modalOffsetY) / modalScale;
 
   modalScale = nextScale;
-  modalOffsetX = anchorX - boardX * modalScale;
-  modalOffsetY = anchorY - boardY * modalScale;
 
-  clampModalTransform();
-  applyModalTransform();
+  const rawX = anchorX - boardX * modalScale;
+  const rawY = anchorY - boardY * modalScale;
+
+  setOffsetsWithElastic(rawX, rawY);
+  springBackToBounds();
 }
 
-function clampModalTransform() {
-  if (!els.modalStage || !state) return;
+function cancelSpring() {
+  if (springFrame) {
+    cancelAnimationFrame(springFrame);
+    springFrame = 0;
+  }
+}
 
-  const viewportW = els.modalBoardScroll.clientWidth;
-  const viewportH = els.modalBoardScroll.clientHeight;
-  const contentW = els.modalStage.offsetWidth * modalScale;
-  const contentH = els.modalStage.offsetHeight * modalScale;
+function springBackToBounds() {
+  cancelSpring();
 
-  if (contentW <= viewportW) {
-    modalOffsetX = (viewportW - contentW) / 2;
-  } else {
-    modalOffsetX = clamp(modalOffsetX, viewportW - contentW, 0);
+  const bounds = getModalBounds();
+  const targetX = clamp(modalOffsetX, bounds.minX, bounds.maxX);
+  const targetY = clamp(modalOffsetY, bounds.minY, bounds.maxY);
+
+  if (Math.abs(targetX - modalOffsetX) < 0.5 && Math.abs(targetY - modalOffsetY) < 0.5) {
+    modalOffsetX = targetX;
+    modalOffsetY = targetY;
+    applyModalTransform();
+    return;
   }
 
-  if (contentH <= viewportH) {
-    modalOffsetY = (viewportH - contentH) / 2;
-  } else {
-    modalOffsetY = clamp(modalOffsetY, viewportH - contentH, 0);
-  }
+  const tick = () => {
+    modalOffsetX += (targetX - modalOffsetX) * 0.18;
+    modalOffsetY += (targetY - modalOffsetY) * 0.18;
+
+    if (Math.abs(targetX - modalOffsetX) < 0.5 && Math.abs(targetY - modalOffsetY) < 0.5) {
+      modalOffsetX = targetX;
+      modalOffsetY = targetY;
+      applyModalTransform();
+      springFrame = 0;
+      return;
+    }
+
+    applyModalTransform();
+    springFrame = requestAnimationFrame(tick);
+  };
+
+  springFrame = requestAnimationFrame(tick);
+}
+
+function setDragging(active) {
+  els.modalBoardScroll?.classList.toggle("dragging", !!active);
 }
 
 function applyModalTransform() {
@@ -1029,10 +1112,13 @@ function openFieldModal() {
 function closeFieldModal() {
   els.fieldModal.classList.add("hidden");
   document.body.classList.remove("modal-open");
+  setDragging(false);
 }
 
 function fitZoom() {
   if (!state || !els.modalStage) return;
+
+  cancelSpring();
 
   const viewportW = Math.max(240, els.modalBoardScroll.clientWidth);
   const viewportH = Math.max(240, els.modalBoardScroll.clientHeight);
@@ -1043,7 +1129,7 @@ function fitZoom() {
   modalOffsetX = 0;
   modalOffsetY = 0;
 
-  clampModalTransform();
+  clampToBoundsImmediate();
   applyModalTransform();
 }
 

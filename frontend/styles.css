@@ -1,3 +1,4 @@
+/* frontend/styles.css */
 :root {
   --bg: #0b1020;
   --bg-2: #121a31;
@@ -51,11 +52,19 @@ body.modal-open {
 button,
 .board,
 .cell,
-.empty-state,
-input {
+.empty-state {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+.field input,
+.text-input {
+  appearance: none;
+  -webkit-appearance: none;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .bg-orb {
@@ -246,10 +255,16 @@ h1 {
   font-size: 12px;
 }
 
-.field input,
-.text-input {
-  appearance: none;
-  -webkit-appearance: none;
+.text-input,
+.field input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 12px 12px;
+  outline: none;
+  font-size: 15px;
 }
 
 .preset-row {
@@ -818,18 +833,25 @@ h1 {
   display: block;
   position: relative;
   touch-action: none;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
+  cursor: grab;
+}
+
+.modal-board-scroll.dragging {
+  cursor: grabbing;
+}
+
+.modal-stage {
+  display: inline-block;
+  width: max-content;
+  padding: 56px;
+  transform-origin: 0 0;
+  will-change: transform;
+  touch-action: none;
 }
 
 .modal-toolbar {
   margin-top: 0;
-}
-
-.modal-stage {
-  width: max-content;
-  transform-origin: 0 0;
-  will-change: transform;
-  touch-action: none;
 }
 
 .toast {
@@ -916,5 +938,9 @@ h1 {
 
   .modal-restart-btn {
     width: 100%;
+  }
+
+  .modal-stage {
+    padding: 40px;
   }
 }
