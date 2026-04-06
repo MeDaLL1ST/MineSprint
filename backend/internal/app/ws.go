@@ -21,6 +21,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.isUserBanned(userID) {
+		http.Error(w, "banned", http.StatusForbidden)
+		return
+	}
+
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return

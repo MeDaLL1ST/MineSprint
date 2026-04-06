@@ -65,6 +65,13 @@ create table if not exists move_events (
   cells_opened int not null default 0,
   created_at timestamptz not null default now()
 );
+
+create table if not exists banned_users (
+  user_id text primary key,
+  reason text not null default '',
+  banned_by text not null default '',
+  banned_at timestamptz not null default now()
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -81,6 +88,64 @@ func (s *Server) upsertUser(id, name, username string) {
              last_seen = now()`,
 		id, name, username,
 	)
+}
+
+func (s *Server) isUserBanned(userID string) bool {
+	var exists bool
+	err := s.db.QueryRow(
+		context.Background(),
+		`select exists(select 1 from banned_users where user_id = $1)`,
+		userID,
+	).Scan(&exists)
+	if err != nil {
+		return false
+	}
+	return exists
+}
+
+func (s *Server) setUserBan(userID, adminID, reason string, banned bool) error {
+	if banned {
+		_, err := s.db.Exec(
+			context.Background(),
+			`insert into banned_users (user_id, reason, banned_by, banned_at)
+             values ($1, $2, $3, now())
+             on conflict (user_id) do update
+             set reason = excluded.reason,
+                 banned_by = excluded.banned_by,
+                 banned_at = now()`,
+			userID, reason, adminID,
+		)
+		if err != nil {
+			return err
+		}
+		s.kickUser(userID)
+		return nil
+	}
+
+	_, err := s.db.Exec(
+		context.Background(),
+		`delete from banned_users where user_id = $1`,
+		userID,
+	)
+	return err
+}
+
+func (s *Server) kickUser(userID string) {
+	var client *Client
+
+	s.mu.Lock()
+	client = s.clients[userID]
+	delete(s.clients, userID)
+
+	if s.currentGameLocked(userID) != nil {
+		s.leaveCurrentGameLocked(userID)
+	}
+	s.mu.Unlock()
+
+	if client != nil {
+		close(client.Send)
+		_ = client.Conn.Close()
+	}
 }
 
 func (s *Server) recordMove(matchID, userID, action string, cellsOpened int) {

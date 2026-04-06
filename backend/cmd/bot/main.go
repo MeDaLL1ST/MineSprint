@@ -10,6 +10,19 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+type webAppInfo struct {
+	URL string `json:"url"`
+}
+
+type webAppButton struct {
+	Text   string      `json:"text"`
+	WebApp *webAppInfo `json:"web_app,omitempty"`
+}
+
+type webAppKeyboard struct {
+	InlineKeyboard [][]webAppButton `json:"inline_keyboard"`
+}
+
 func main() {
 	cfg := app.LoadConfig()
 
@@ -66,28 +79,14 @@ func parseRoomCode(arg string) string {
 	if strings.HasPrefix(strings.ToLower(arg), "room_") {
 		arg = arg[5:]
 	}
-	arg = strings.ToUpper(strings.TrimSpace(arg))
-	return arg
+	return strings.ToUpper(strings.TrimSpace(arg))
 }
 
-func buildAppURL(base, roomCode string) string {
+func buildAppURL(baseURL, roomCode string) string {
 	if roomCode == "" {
-		return base
+		return baseURL
 	}
-	return base + "/?room=" + url.QueryEscape(roomCode)
-}
-
-type webAppInfo struct {
-	URL string `json:"url"`
-}
-
-type webAppButton struct {
-	Text   string      `json:"text"`
-	WebApp *webAppInfo `json:"web_app,omitempty"`
-}
-
-type webAppKeyboard struct {
-	InlineKeyboard [][]webAppButton `json:"inline_keyboard"`
+	return baseURL + "/?room=" + url.QueryEscape(roomCode)
 }
 
 func sendOpenApp(bot *tgbotapi.BotAPI, chatID int64, baseURL, roomCode string) {

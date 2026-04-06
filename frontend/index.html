@@ -19,7 +19,7 @@
       <div>
         <div class="eyebrow">Telegram Mini App</div>
         <h1>MineSprint</h1>
-        <div class="subtitle">Сапёр: solo, co-op, versus, комнаты, рейтинг</div>
+        <div class="subtitle">Сапёр: solo, co-op, versus, комнаты</div>
       </div>
       <div class="user-chip" id="userChip">...</div>
     </header>
@@ -57,7 +57,7 @@
             <button class="mini-btn" data-preset="16x16x40">16×16×40</button>
           </div>
           <div class="hint">
-            Поле настраивается вручную. Для больших полей используй кнопку «Открыть поле».
+            Для больших полей используй кнопку «Открыть поле».
           </div>
         </div>
 
@@ -126,34 +126,41 @@
           </div>
         </div>
 
-        <div class="section">
-          <div class="section-title">Leaderboard</div>
-          <div class="section-head">
-            <span class="muted">Топ игроков</span>
-            <button id="refreshLeaderboardBtn" class="mini-btn">Обновить</button>
-          </div>
-          <div id="leaderboardList" class="leaderboard-list">
-            <div class="placeholder">Загрузка...</div>
-          </div>
-        </div>
+        <details id="adminSection" class="section hidden admin-details">
+          <summary class="admin-toggle">
+            <span>Админка</span>
+            <span class="admin-arrow">▾</span>
+          </summary>
 
-        <div id="adminSection" class="section hidden">
-          <div class="section-title">Админка</div>
-          <div class="section-head">
-            <span class="muted">Только для тебя</span>
-            <button id="refreshAdminBtn" class="mini-btn">Обновить</button>
-          </div>
+          <div class="admin-panel">
+            <div class="section-head">
+              <span class="muted">Только для тебя</span>
+              <button id="refreshAdminBtn" class="mini-btn">Обновить</button>
+            </div>
 
-          <div id="adminSummary" class="admin-grid"></div>
-          <div class="admin-block">
-            <div class="admin-subtitle">Топ по играм</div>
-            <div id="adminTopUsers" class="admin-list"></div>
+            <div id="adminSummary" class="admin-grid"></div>
+
+            <div class="admin-block">
+              <div class="admin-subtitle">Leaderboard</div>
+              <div id="adminLeaderboard" class="admin-list"></div>
+            </div>
+
+            <div class="admin-block">
+              <div class="admin-subtitle">Пользователи</div>
+              <div id="adminUsers" class="admin-list"></div>
+            </div>
+
+            <div class="admin-block">
+              <div class="admin-subtitle">Топ по играм</div>
+              <div id="adminTopUsers" class="admin-list"></div>
+            </div>
+
+            <div class="admin-block">
+              <div class="admin-subtitle">Последние матчи</div>
+              <div id="adminRecentMatches" class="admin-list"></div>
+            </div>
           </div>
-          <div class="admin-block">
-            <div class="admin-subtitle">Последние матчи</div>
-            <div id="adminRecentMatches" class="admin-list"></div>
-          </div>
-        </div>
+        </details>
       </aside>
 
       <main class="card board-card">
@@ -225,6 +232,8 @@
             <button id="fitZoomBtn" class="zoom-btn">Fit</button>
             <button id="zoomInBtn" class="zoom-btn">+</button>
           </div>
+
+          <button id="modalRestartBtn" class="btn btn-primary hidden modal-restart-btn">Рестарт</button>
         </div>
 
         <div class="modal-hint">Касание — открыть · Зажатие — флаг · Правый клик — флаг</div>

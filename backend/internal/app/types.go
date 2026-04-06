@@ -120,6 +120,7 @@ type AdminTopUser struct {
 	Wins       int       `json:"wins"`
 	TotalScore int       `json:"totalScore"`
 	LastSeen   time.Time `json:"lastSeen"`
+	Banned     bool      `json:"banned"`
 }
 
 type AdminRecentMatch struct {

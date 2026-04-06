@@ -154,10 +154,6 @@ func (s *Server) restartRoom(c *Client) {
 		s.sendError(c, "Нет активной комнаты")
 		return
 	}
-	if game.OwnerID != c.ID {
-		s.sendError(c, "Только создатель комнаты может перезапустить раунд")
-		return
-	}
 
 	room := s.rooms[game.RoomCode]
 	if room == nil {

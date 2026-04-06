@@ -49,6 +49,7 @@ const els = {
   zoomInBtn: $("#zoomInBtn"),
   zoomOutBtn: $("#zoomOutBtn"),
   fitZoomBtn: $("#fitZoomBtn"),
+  modalRestartBtn: $("#modalRestartBtn"),
 
   statusText: $("#statusText"),
   badge: $("#badge"),
@@ -61,12 +62,11 @@ const els = {
   overlayActionBtn: $("#overlayActionBtn"),
   fieldModal: $("#fieldModal"),
 
-  refreshLeaderboardBtn: $("#refreshLeaderboardBtn"),
-  leaderboardList: $("#leaderboardList"),
-
   adminSection: $("#adminSection"),
   refreshAdminBtn: $("#refreshAdminBtn"),
   adminSummary: $("#adminSummary"),
+  adminLeaderboard: $("#adminLeaderboard"),
+  adminUsers: $("#adminUsers"),
   adminTopUsers: $("#adminTopUsers"),
   adminRecentMatches: $("#adminRecentMatches"),
 
@@ -75,7 +75,6 @@ const els = {
 
 let ws = null;
 let state = null;
-let leaderboard = [];
 let adminStats = null;
 let selectedMode = "solo";
 let inputMode = "open";
@@ -85,7 +84,6 @@ let boardZoom = 1;
 let remoteHovers = {};
 let lastHoverCell = null;
 let frozenElapsedSec = 0;
-let lastGameId = "";
 
 const presets = {
   solo: { rows: 9, cols: 9, mines: 10 },
@@ -99,7 +97,6 @@ const initialRoomCode = new URLSearchParams(location.search).get("room")?.toUppe
 bindUI();
 applyPresetIfNeeded();
 renderBase();
-loadLeaderboard();
 setInterval(updateTopCounters, 1000);
 
 if (isTelegramReady()) {
@@ -169,7 +166,6 @@ function bindUI() {
       cols: getCols(),
       mines: getMines(),
     });
-    impact("light");
   });
 
   els.createRoomBtn.addEventListener("click", () => {
@@ -193,27 +189,11 @@ function bindUI() {
   });
 
   els.shareBtn.addEventListener("click", shareRoomLink);
+  els.leaveRoomBtn.addEventListener("click", () => send({ type: "leave_room" }));
+  els.restartRoomBtn.addEventListener("click", restartCurrentGame);
 
-  els.leaveRoomBtn.addEventListener("click", () => {
-    send({ type: "leave_room" });
-  });
-
-  els.restartRoomBtn.addEventListener("click", () => {
-    send({ type: "restart_room" });
-  });
-
-  els.overlayActionBtn.addEventListener("click", () => {
-    if (state?.online) {
-      send({ type: "restart_room" });
-    } else {
-      send({
-        type: "start_solo",
-        rows: state?.rows || getRows(),
-        cols: state?.cols || getCols(),
-        mines: state?.mines || getMines(),
-      });
-    }
-  });
+  els.overlayActionBtn.addEventListener("click", restartCurrentGame);
+  els.modalRestartBtn.addEventListener("click", restartCurrentGame);
 
   els.openFieldBtn.addEventListener("click", openFieldModal);
   els.closeFieldBtn.addEventListener("click", closeFieldModal);
@@ -230,22 +210,32 @@ function bindUI() {
 
   els.fitZoomBtn.addEventListener("click", fitZoom);
 
-  els.refreshLeaderboardBtn.addEventListener("click", loadLeaderboard);
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
 
   els.boardPreview.addEventListener("mouseleave", clearHoverCell);
   els.boardModal.addEventListener("mouseleave", clearHoverCell);
 
   els.fieldModal.addEventListener("click", (e) => {
-    if (e.target === els.fieldModal) {
-      closeFieldModal();
-    }
+    if (e.target === els.fieldModal) closeFieldModal();
   });
 
   window.addEventListener("resize", () => {
     renderBoards();
     updateTopCounters();
   });
+}
+
+function restartCurrentGame() {
+  if (state?.online) {
+    send({ type: "restart_room" });
+  } else {
+    send({
+      type: "start_solo",
+      rows: state?.rows || getRows(),
+      cols: state?.cols || getCols(),
+      mines: state?.mines || getMines(),
+    });
+  }
 }
 
 function applyPresetIfNeeded() {
@@ -362,7 +352,6 @@ function handleMessage(msg) {
     clearHoverCell(true);
 
     if (state.gameId !== prevGameId) {
-      lastGameId = state.gameId;
       boardZoom = defaultZoomForState(state);
       frozenElapsedSec = 0;
     }
@@ -375,7 +364,6 @@ function handleMessage(msg) {
     render();
 
     if (state.over) {
-      loadLeaderboard();
       if (user.id === ADMIN_TG_ID) loadAdminStats();
       if (state.won) {
         tg?.HapticFeedback?.notificationOccurred?.("success");
@@ -428,7 +416,6 @@ function renderBase() {
   renderModeButtons();
   renderRoomControls();
   renderStats();
-  renderLeaderboard();
 }
 
 function render() {
@@ -513,9 +500,13 @@ function renderPlayers() {
     if (state.over && state.winnerId && player.id === state.winnerId) div.classList.add("winner");
 
     div.innerHTML = `
-      <div class="player-name">${escapeHtml(player.name)}</div>
-      <div class="player-meta">${player.id === state.you?.id ? "Вы" : "Игрок"}</div>
-      <div class="player-score">${player.score ?? 0}</div>
+      <div class="player-row">
+        <div class="player-main">
+          <div class="player-name">${escapeHtml(player.name)}</div>
+          <div class="player-meta">${player.id === state.you?.id ? "Вы" : "Игрок"}</div>
+        </div>
+        <div class="player-score">${player.score ?? 0}</div>
+      </div>
     `;
     els.playersGrid.appendChild(div);
   });
@@ -537,7 +528,7 @@ function renderBoardTo(container, modal) {
   const baseCellSize = modal ? getModalBaseCellSize(cols) : getPreviewBaseCellSize(cols);
   const scale = modal ? boardZoom : 1;
   const cellSize = Math.max(12, Math.round(baseCellSize * scale));
-  const cellFont = Math.max(8, Math.round(cellSize * 0.52));
+  const cellFont = Math.max(8, Math.round(cellSize * 0.5));
   const gap = cellSize <= 14 ? 2 : cellSize <= 20 ? 3 : 4;
 
   container.style.setProperty("--cell-size", `${cellSize}px`);
@@ -576,20 +567,19 @@ function wireCellButton(btn, cellIndex) {
     }
     if (state?.over) return;
     handlePrimaryAction(cellIndex);
-    impact("light");
   });
 
   btn.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (state?.over) return;
     toggleFlag(cellIndex);
-    impact("medium");
   });
 
   btn.addEventListener(
     "touchstart",
-    () => {
+    (e) => {
       if (state?.over) return;
+      e.preventDefault();
       sendHoverCell(cellIndex);
       btn._longPressTriggered = false;
       clearTimeout(btn._touchTimer);
@@ -600,7 +590,7 @@ function wireCellButton(btn, cellIndex) {
         impact("medium");
       }, LONG_PRESS_MS);
     },
-    { passive: true }
+    { passive: false }
   );
 
   btn.addEventListener(
@@ -618,7 +608,6 @@ function wireCellButton(btn, cellIndex) {
       btn._ignoreClickUntil = Date.now() + 500;
       if (!state?.over) {
         handlePrimaryAction(cellIndex);
-        impact("light");
       }
       e.preventDefault();
     },
@@ -664,20 +653,25 @@ function clearHoverCell(silent = false) {
 }
 
 function renderOverlay() {
-  if (!state?.over) {
+  const over = !!state?.over;
+
+  if (!over) {
     els.overlay.classList.add("hidden");
+    els.modalRestartBtn.classList.add("hidden");
     return;
   }
 
   els.overlay.classList.remove("hidden");
   els.overlayTitle.textContent = state.status || "Раунд завершён";
   els.overlayActionBtn.textContent = state.online ? "Рестарт комнаты" : "Сыграть ещё";
+
+  els.modalRestartBtn.classList.remove("hidden");
+  els.modalRestartBtn.textContent = state.online ? "Рестарт комнаты" : "Сыграть ещё";
 }
 
 function updateTopCounters() {
   const minesLeft = state?.flagsLeft ?? getMines();
   const elapsed = state?.over ? frozenElapsedSec : computeElapsedSec(state);
-
   const timeText = formatDuration(elapsed);
 
   els.flagsValue.textContent = String(minesLeft);
@@ -714,9 +708,7 @@ function pad2(v) {
 function openFieldModal() {
   els.fieldModal.classList.remove("hidden");
   document.body.classList.add("modal-open");
-  if (state) {
-    fitZoom();
-  }
+  if (state) fitZoom();
 }
 
 function closeFieldModal() {
@@ -829,40 +821,6 @@ async function shareRoomLink() {
   }
 }
 
-async function loadLeaderboard() {
-  try {
-    const res = await fetch("/api/leaderboard");
-    const data = await res.json();
-    leaderboard = data.items || [];
-    renderLeaderboard();
-  } catch (_) {
-    els.leaderboardList.innerHTML = `<div class="placeholder">Не удалось загрузить leaderboard</div>`;
-  }
-}
-
-function renderLeaderboard() {
-  if (!leaderboard.length) {
-    els.leaderboardList.innerHTML = `<div class="placeholder">Пока нет сыгранных матчей</div>`;
-    return;
-  }
-
-  els.leaderboardList.innerHTML = leaderboard
-    .map((item, index) => {
-      return `
-        <div class="lb-item">
-          <div class="lb-top">
-            <span>#${index + 1} ${escapeHtml(item.name)}</span>
-            <span>${item.wins} побед</span>
-          </div>
-          <div class="lb-meta">
-            Игры: ${item.games} · Co-op wins: ${item.coopWins} · Versus wins: ${item.versusWins} · Очки: ${item.totalScore}
-          </div>
-        </div>
-      `;
-    })
-    .join("");
-}
-
 async function loadAdminStats() {
   if (user.id !== ADMIN_TG_ID || !tg?.initData) return;
 
@@ -873,9 +831,7 @@ async function loadAdminStats() {
       },
     });
     const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || "admin error");
-    }
+    if (!res.ok) throw new Error(data.error || "admin error");
     adminStats = data;
     renderAdmin();
   } catch (_) {
@@ -888,6 +844,10 @@ function renderAdmin() {
 
   const s = adminStats.summary || {};
   const byMode = adminStats.byMode || {};
+  const leaderboard = adminStats.leaderboard || [];
+  const users = adminStats.users || [];
+  const topUsers = adminStats.topUsers || [];
+  const recent = adminStats.recentMatches || [];
 
   els.adminSummary.innerHTML = `
     <div class="admin-card"><span>Пользователи</span><strong>${s.totalUsers ?? 0}</strong></div>
@@ -900,33 +860,122 @@ function renderAdmin() {
     <div class="admin-card"><span>Co-op / Versus</span><strong>${(byMode.coop ?? 0) + (byMode.versus ?? 0)}</strong></div>
   `;
 
-  const topUsers = adminStats.topUsers || [];
-  els.adminTopUsers.innerHTML = topUsers.length
-    ? topUsers
-        .map((item) => {
+  els.adminLeaderboard.innerHTML = leaderboard.length
+    ? leaderboard
+        .map((item, index) => {
           return `
             <div class="admin-item">
-              <div><strong>${escapeHtml(item.name)}</strong></div>
-              <div class="admin-meta">Игры: ${item.games} · Победы: ${item.wins} · Очки: ${item.totalScore}</div>
+              <div class="admin-item-top">
+                <strong>#${index + 1} ${escapeHtml(item.name)}</strong>
+                <span>${item.wins} побед</span>
+              </div>
+              <div class="admin-meta">Игры: ${item.games} · Co-op wins: ${item.coopWins} · Versus wins: ${item.versusWins} · Очки: ${item.totalScore}</div>
             </div>
           `;
         })
         .join("")
     : `<div class="placeholder">Нет данных</div>`;
 
-  const recent = adminStats.recentMatches || [];
-  els.adminRecentMatches.innerHTML = recent.length
-    ? recent
+  els.adminUsers.innerHTML = users.length
+    ? users
         .map((item) => {
           return `
             <div class="admin-item">
-              <div><strong>${escapeHtml(prettyMode(item.mode))}</strong> · ${item.rows}×${item.cols} · ${item.mines} мин</div>
-              <div class="admin-meta">${escapeHtml(item.players || "")}</div>
+              <div class="admin-item-top">
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>${item.banned ? "Забанен" : "Активен"}</span>
+              </div>
+              <div class="admin-meta">Игры: ${item.games} · Победы: ${item.wins} · Очки: ${item.totalScore}</div>
+              <div class="admin-actions">
+                ${
+                  item.id === ADMIN_TG_ID
+                    ? ""
+                    : item.banned
+                    ? `<button class="ban-btn unban" data-unban-user="${item.id}">Разбанить</button>`
+                    : `<button class="ban-btn ban" data-ban-user="${item.id}">Забанить</button>`
+                }
+              </div>
             </div>
           `;
         })
         .join("")
     : `<div class="placeholder">Нет данных</div>`;
+
+  els.adminTopUsers.innerHTML = topUsers.length
+    ? topUsers
+        .map((item) => {
+          return `
+            <div class="admin-item">
+              <div class="admin-item-top">
+                <strong>${escapeHtml(item.name)}</strong>
+                <span>${item.banned ? "Забанен" : item.games + " игр"}</span>
+              </div>
+              <div class="admin-meta">Победы: ${item.wins} · Очки: ${item.totalScore}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="placeholder">Нет данных</div>`;
+
+  els.adminRecentMatches.innerHTML = recent.length
+    ? recent
+        .map((item) => {
+          return `
+            <div class="admin-item">
+              <div class="admin-item-top">
+                <strong>${escapeHtml(prettyMode(item.mode))}</strong>
+                <span>${item.rows}×${item.cols}</span>
+              </div>
+              <div class="admin-meta">${item.mines} мин · ${escapeHtml(item.players || "")}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="placeholder">Нет данных</div>`;
+
+  bindAdminButtons();
+}
+
+function bindAdminButtons() {
+  document.querySelectorAll("[data-ban-user]").forEach((btn) => {
+    btn.onclick = async () => {
+      await setBan(btn.dataset.banUser, true);
+    };
+  });
+
+  document.querySelectorAll("[data-unban-user]").forEach((btn) => {
+    btn.onclick = async () => {
+      await setBan(btn.dataset.unbanUser, false);
+    };
+  });
+}
+
+async function setBan(userId, banned) {
+  if (!userId) return;
+
+  const endpoint = banned ? "/api/admin/ban" : "/api/admin/unban";
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": tg.initData,
+      },
+      body: JSON.stringify({
+        userId,
+        reason: banned ? "banned by admin" : "",
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+
+    toast(banned ? "Игрок забанен" : "Игрок разбанен");
+    await loadAdminStats();
+  } catch (e) {
+    toast(e.message || "Ошибка");
+  }
 }
 
 function clamp(v, min, max) {

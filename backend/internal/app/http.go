@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 func NewMux(s *Server) http.Handler {
@@ -10,6 +12,8 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/leaderboard", s.handleLeaderboard)
 	mux.HandleFunc("/api/admin/stats", s.handleAdminStats)
+	mux.HandleFunc("/api/admin/ban", s.handleAdminBan)
+	mux.HandleFunc("/api/admin/unban", s.handleAdminUnban)
 	mux.HandleFunc("/ws", s.handleWS)
 	return mux
 }
@@ -19,63 +23,28 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), `
-select
-  u.id,
-  u.name,
-  count(mp.match_id)::int as games,
-  coalesce(sum(case when mp.result = 'win' then 1 else 0 end), 0)::int as wins,
-  coalesce(sum(case when m.mode = 'coop' and mp.result = 'win' then 1 else 0 end), 0)::int as coop_wins,
-  coalesce(sum(case when m.mode = 'versus' and mp.result = 'win' then 1 else 0 end), 0)::int as versus_wins,
-  coalesce(sum(mp.score), 0)::int as total_score
-from users u
-join match_players mp on mp.user_id = u.id
-join matches m on m.id = mp.match_id
-group by u.id, u.name
-order by wins desc, total_score desc, games desc
-limit 20
-`)
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	if _, err := s.requireAdmin(r); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	items, err := s.queryLeaderboard(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
-	}
-	defer rows.Close()
-
-	items := make([]LeaderboardEntry, 0)
-	for rows.Next() {
-		var item LeaderboardEntry
-		if err := rows.Scan(
-			&item.ID,
-			&item.Name,
-			&item.Games,
-			&item.Wins,
-			&item.CoopWins,
-			&item.VersusWins,
-			&item.TotalScore,
-		); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		items = append(items, item)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
-	initData := r.Header.Get("X-Telegram-Init-Data")
-	if initData == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing init data"})
-		return
-	}
-
-	userID, _, _, err := validateInitData(s.cfg.BotToken, initData)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid init data"})
-		return
-	}
-	if userID != s.cfg.AdminTGID {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+	if _, err := s.requireAdmin(r); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -109,75 +78,28 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		byMode[mode] = count
 	}
 
-	topUsersRows, err := s.db.Query(r.Context(), `
-select
-  u.id,
-  u.name,
-  count(mp.match_id)::int as games,
-  coalesce(sum(case when mp.result = 'win' then 1 else 0 end), 0)::int as wins,
-  coalesce(sum(mp.score), 0)::int as total_score,
-  u.last_seen
-from users u
-left join match_players mp on mp.user_id = u.id
-group by u.id, u.name, u.last_seen
-order by games desc, wins desc, total_score desc
-limit 10
-`)
+	leaderboard, err := s.queryLeaderboard(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	defer topUsersRows.Close()
 
-	topUsers := make([]AdminTopUser, 0)
-	for topUsersRows.Next() {
-		var row AdminTopUser
-		if err := topUsersRows.Scan(&row.ID, &row.Name, &row.Games, &row.Wins, &row.TotalScore, &row.LastSeen); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		topUsers = append(topUsers, row)
-	}
-
-	recentRows, err := s.db.Query(r.Context(), `
-select
-  m.id,
-  m.mode,
-  m.rows,
-  m.cols,
-  m.mines,
-  m.duration_sec,
-  m.created_at,
-  coalesce(string_agg(mp.name || ' (' || mp.score::text || ')', ', ' order by mp.score desc), '') as players
-from matches m
-left join match_players mp on mp.match_id = m.id
-group by m.id, m.mode, m.rows, m.cols, m.mines, m.duration_sec, m.created_at
-order by m.created_at desc
-limit 10
-`)
+	topUsers, err := s.queryTopUsers(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	defer recentRows.Close()
 
-	recentMatches := make([]AdminRecentMatch, 0)
-	for recentRows.Next() {
-		var row AdminRecentMatch
-		if err := recentRows.Scan(
-			&row.ID,
-			&row.Mode,
-			&row.Rows,
-			&row.Cols,
-			&row.Mines,
-			&row.DurationSec,
-			&row.CreatedAt,
-			&row.Players,
-		); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		recentMatches = append(recentMatches, row)
+	users, err := s.queryRecentUsers(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	recentMatches, err := s.queryRecentMatches(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
 	}
 
 	s.mu.Lock()
@@ -198,9 +120,285 @@ limit 10
 			"liveGames":    liveGames,
 		},
 		"byMode":        byMode,
+		"leaderboard":   leaderboard,
+		"users":         users,
 		"topUsers":      topUsers,
 		"recentMatches": recentMatches,
 	})
+}
+
+func (s *Server) handleAdminBan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	adminID, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
+		return
+	}
+	if req.UserID == s.cfg.AdminTGID {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "admin ban is forbidden"})
+		return
+	}
+
+	if err := s.setUserBan(req.UserID, adminID, strings.TrimSpace(req.Reason), true); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminUnban(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	_, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
+		return
+	}
+
+	if err := s.setUserBan(req.UserID, "", "", false); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) requireAdmin(r *http.Request) (string, error) {
+	initData := strings.TrimSpace(r.Header.Get("X-Telegram-Init-Data"))
+	if initData == "" {
+		return "", http.ErrNoCookie
+	}
+
+	userID, _, _, err := validateInitData(s.cfg.BotToken, initData)
+	if err != nil {
+		return "", err
+	}
+	if userID != s.cfg.AdminTGID {
+		return "", http.ErrNotSupported
+	}
+	return userID, nil
+}
+
+func (s *Server) queryLeaderboard(ctx context.Context) ([]LeaderboardEntry, error) {
+	rows, err := s.db.Query(ctx, `
+select
+  u.id,
+  u.name,
+  count(mp.match_id)::int as games,
+  coalesce(sum(case when mp.result = 'win' then 1 else 0 end), 0)::int as wins,
+  coalesce(sum(case when m.mode = 'coop' and mp.result = 'win' then 1 else 0 end), 0)::int as coop_wins,
+  coalesce(sum(case when m.mode = 'versus' and mp.result = 'win' then 1 else 0 end), 0)::int as versus_wins,
+  coalesce(sum(mp.score), 0)::int as total_score
+from users u
+join match_players mp on mp.user_id = u.id
+join matches m on m.id = mp.match_id
+left join banned_users b on b.user_id = u.id
+where b.user_id is null
+group by u.id, u.name
+order by wins desc, total_score desc, games desc
+limit 20
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]LeaderboardEntry, 0)
+	for rows.Next() {
+		var item LeaderboardEntry
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.Games,
+			&item.Wins,
+			&item.CoopWins,
+			&item.VersusWins,
+			&item.TotalScore,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func (s *Server) queryTopUsers(ctx context.Context) ([]AdminTopUser, error) {
+	rows, err := s.db.Query(ctx, `
+select
+  u.id,
+  u.name,
+  coalesce(st.games, 0)::int as games,
+  coalesce(st.wins, 0)::int as wins,
+  coalesce(st.total_score, 0)::int as total_score,
+  u.last_seen,
+  (b.user_id is not null) as banned
+from users u
+left join (
+  select
+    mp.user_id,
+    count(mp.match_id)::int as games,
+    coalesce(sum(case when mp.result = 'win' then 1 else 0 end), 0)::int as wins,
+    coalesce(sum(mp.score), 0)::int as total_score
+  from match_players mp
+  group by mp.user_id
+) st on st.user_id = u.id
+left join banned_users b on b.user_id = u.id
+order by games desc, wins desc, total_score desc, u.last_seen desc
+limit 15
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]AdminTopUser, 0)
+	for rows.Next() {
+		var item AdminTopUser
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.Games,
+			&item.Wins,
+			&item.TotalScore,
+			&item.LastSeen,
+			&item.Banned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func (s *Server) queryRecentUsers(ctx context.Context) ([]AdminTopUser, error) {
+	rows, err := s.db.Query(ctx, `
+select
+  u.id,
+  u.name,
+  coalesce(st.games, 0)::int as games,
+  coalesce(st.wins, 0)::int as wins,
+  coalesce(st.total_score, 0)::int as total_score,
+  u.last_seen,
+  (b.user_id is not null) as banned
+from users u
+left join (
+  select
+    mp.user_id,
+    count(mp.match_id)::int as games,
+    coalesce(sum(case when mp.result = 'win' then 1 else 0 end), 0)::int as wins,
+    coalesce(sum(mp.score), 0)::int as total_score
+  from match_players mp
+  group by mp.user_id
+) st on st.user_id = u.id
+left join banned_users b on b.user_id = u.id
+order by u.last_seen desc
+limit 25
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]AdminTopUser, 0)
+	for rows.Next() {
+		var item AdminTopUser
+		if err := rows.Scan(
+			&item.ID,
+			&item.Name,
+			&item.Games,
+			&item.Wins,
+			&item.TotalScore,
+			&item.LastSeen,
+			&item.Banned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+func (s *Server) queryRecentMatches(ctx context.Context) ([]AdminRecentMatch, error) {
+	rows, err := s.db.Query(ctx, `
+select
+  m.id,
+  m.mode,
+  m.rows,
+  m.cols,
+  m.mines,
+  m.duration_sec,
+  m.created_at,
+  coalesce(string_agg(mp.name || ' (' || mp.score::text || ')', ', ' order by mp.score desc), '') as players
+from matches m
+left join match_players mp on mp.match_id = m.id
+group by m.id, m.mode, m.rows, m.cols, m.mines, m.duration_sec, m.created_at
+order by m.created_at desc
+limit 10
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]AdminRecentMatch, 0)
+	for rows.Next() {
+		var item AdminRecentMatch
+		if err := rows.Scan(
+			&item.ID,
+			&item.Mode,
+			&item.Rows,
+			&item.Cols,
+			&item.Mines,
+			&item.DurationSec,
+			&item.CreatedAt,
+			&item.Players,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
