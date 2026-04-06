@@ -33,6 +33,7 @@ type Game struct {
 	Players    []string
 	Names      map[string]string
 	Scores     map[string]int
+	Hovers     map[string]int
 	Over       bool
 	WinnerID   string
 	EndReason  string
@@ -78,25 +79,28 @@ type PlayerBrief struct {
 }
 
 type State struct {
-	GameID     string        `json:"gameId"`
-	RoomCode   string        `json:"roomCode,omitempty"`
-	InviteLink string        `json:"inviteLink,omitempty"`
-	Mode       string        `json:"mode"`
-	Online     bool          `json:"online"`
-	OwnerID    string        `json:"ownerId,omitempty"`
-	Rows       int           `json:"rows"`
-	Cols       int           `json:"cols"`
-	Mines      int           `json:"mines"`
-	FlagsLeft  int           `json:"flagsLeft"`
-	Generated  bool          `json:"generated"`
-	Over       bool          `json:"over"`
-	Won        bool          `json:"won"`
-	WinnerID   string        `json:"winnerId,omitempty"`
-	WinnerName string        `json:"winnerName,omitempty"`
-	You        PlayerBrief   `json:"you"`
-	Players    []PlayerBrief `json:"players"`
-	Status     string        `json:"status"`
-	Board      []ClientCell  `json:"board"`
+	GameID     string         `json:"gameId"`
+	RoomCode   string         `json:"roomCode,omitempty"`
+	InviteLink string         `json:"inviteLink,omitempty"`
+	ShareLink  string         `json:"shareLink,omitempty"`
+	Mode       string         `json:"mode"`
+	Online     bool           `json:"online"`
+	OwnerID    string         `json:"ownerId,omitempty"`
+	Rows       int            `json:"rows"`
+	Cols       int            `json:"cols"`
+	Mines      int            `json:"mines"`
+	FlagsLeft  int            `json:"flagsLeft"`
+	Generated  bool           `json:"generated"`
+	Over       bool           `json:"over"`
+	Won        bool           `json:"won"`
+	WinnerID   string         `json:"winnerId,omitempty"`
+	WinnerName string         `json:"winnerName,omitempty"`
+	StartedAt  int64          `json:"startedAt"`
+	You        PlayerBrief    `json:"you"`
+	Players    []PlayerBrief  `json:"players"`
+	Hovers     map[string]int `json:"hovers,omitempty"`
+	Status     string         `json:"status"`
+	Board      []ClientCell   `json:"board"`
 }
 
 type LeaderboardEntry struct {

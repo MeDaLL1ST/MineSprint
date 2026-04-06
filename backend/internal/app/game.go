@@ -61,9 +61,10 @@ func (s *Server) createRoom(c *Client, mode string, rows, cols, mines int) {
 	s.playerGame[c.ID] = game.ID
 
 	s.send(c, map[string]any{
-		"type": "room_created",
-		"code": code,
-		"link": s.buildInviteLink(code),
+		"type":      "room_created",
+		"code":      code,
+		"link":      s.buildInviteLink(code),
+		"shareLink": s.buildShareLink(code),
 	})
 
 	s.pushGameLocked(game)
@@ -104,6 +105,9 @@ func (s *Server) joinRoom(c *Client, code string) {
 		game.Names[c.ID] = c.Name
 		if _, ok := game.Scores[c.ID]; !ok {
 			game.Scores[c.ID] = 0
+		}
+		if game.Hovers == nil {
+			game.Hovers = map[string]int{}
 		}
 		s.playerGame[c.ID] = game.ID
 	}
@@ -305,6 +309,47 @@ func (s *Server) toggleFlag(c *Client, idx int) {
 	go s.recordMove(matchID, c.ID, "flag", 0)
 }
 
+func (s *Server) setHover(c *Client, idx int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	game := s.currentGameLocked(c.ID)
+	if game == nil || game.Mode == "solo" {
+		return
+	}
+	if game.Hovers == nil {
+		game.Hovers = map[string]int{}
+	}
+
+	if idx < 0 || idx >= len(game.Board) {
+		if _, ok := game.Hovers[c.ID]; ok {
+			delete(game.Hovers, c.ID)
+			s.pushHoverLocked(game, c.ID, -1, false)
+		}
+		return
+	}
+
+	if prev, ok := game.Hovers[c.ID]; ok && prev == idx {
+		return
+	}
+
+	game.Hovers[c.ID] = idx
+	s.pushHoverLocked(game, c.ID, idx, true)
+}
+
+func (s *Server) pushHoverLocked(g *Game, playerID string, cell int, active bool) {
+	for _, pid := range g.Players {
+		if c := s.clients[pid]; c != nil {
+			s.send(c, map[string]any{
+				"type":     "hover",
+				"playerId": playerID,
+				"cell":     cell,
+				"active":   active,
+			})
+		}
+	}
+}
+
 func (s *Server) leaveCurrentGameLocked(playerID string) {
 	game := s.currentGameLocked(playerID)
 	if game == nil {
@@ -321,6 +366,10 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 
 	room := s.rooms[game.RoomCode]
 
+	if game.Hovers != nil {
+		delete(game.Hovers, playerID)
+	}
+
 	game.Players = removePlayer(game.Players, playerID)
 	delete(game.Names, playerID)
 	delete(game.Scores, playerID)
@@ -333,6 +382,7 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		if game.OwnerID == playerID || !contains(game.Players, game.OwnerID) {
 			game.OwnerID = game.Players[0]
 		}
+		s.pushHoverLocked(game, playerID, -1, false)
 		s.pushGameLocked(game)
 		return
 	}
@@ -352,6 +402,7 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		room.OwnerID = game.OwnerID
 	}
 
+	s.pushHoverLocked(game, playerID, -1, false)
 	s.pushGameLocked(game)
 }
 
@@ -401,10 +452,21 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		winnerName = g.Names[g.WinnerID]
 	}
 
+	hovers := map[string]int{}
+	for pid, cell := range g.Hovers {
+		if contains(g.Players, pid) {
+			hovers[pid] = cell
+		}
+	}
+	if len(hovers) == 0 {
+		hovers = nil
+	}
+
 	return State{
 		GameID:     g.ID,
 		RoomCode:   g.RoomCode,
 		InviteLink: s.buildInviteLink(g.RoomCode),
+		ShareLink:  s.buildShareLink(g.RoomCode),
 		Mode:       g.Mode,
 		Online:     g.Mode != "solo",
 		OwnerID:    g.OwnerID,
@@ -417,12 +479,14 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		Won:        wonForPlayer(g, playerID),
 		WinnerID:   g.WinnerID,
 		WinnerName: winnerName,
+		StartedAt:  g.StartedAt.Unix(),
 		You: PlayerBrief{
 			ID:    playerID,
 			Name:  g.Names[playerID],
 			Score: g.Scores[playerID],
 		},
 		Players: players,
+		Hovers:  hovers,
 		Status:  statusText(g, playerID),
 		Board:   board,
 	}
@@ -436,6 +500,16 @@ func (s *Server) buildInviteLink(code string) string {
 		return "/?room=" + code
 	}
 	return s.cfg.PublicBaseURL + "/?room=" + code
+}
+
+func (s *Server) buildShareLink(code string) string {
+	if strings.TrimSpace(code) == "" {
+		return ""
+	}
+	if strings.TrimSpace(s.cfg.BotUsername) == "" {
+		return s.buildInviteLink(code)
+	}
+	return "https://t.me/" + s.cfg.BotUsername + "?start=room_" + code
 }
 
 func statusText(g *Game, playerID string) string {
@@ -533,6 +607,7 @@ func newGame(mode string, rows, cols, mines int, players []string, names map[str
 		Players:    append([]string{}, players...),
 		Names:      playerNames,
 		Scores:     scores,
+		Hovers:     map[string]int{},
 		StartedAt:  time.Now(),
 		LastAction: time.Now(),
 	}

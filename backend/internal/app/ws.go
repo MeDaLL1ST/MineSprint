@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +92,7 @@ func (s *Server) unregisterClient(c *Client) {
 func (s *Server) writeLoop(c *Client) {
 	for msg := range c.Send {
 		c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := c.Conn.WriteMessage(1, msg); err != nil {
+		if err := c.Conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			return
 		}
 	}
@@ -112,6 +114,8 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.revealCell(c, act.Cell)
 	case "toggle_flag":
 		s.toggleFlag(c, act.Cell)
+	case "hover":
+		s.setHover(c, act.Cell)
 	default:
 		s.sendError(c, "Неизвестное действие")
 	}

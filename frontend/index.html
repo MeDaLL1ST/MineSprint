@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=yes, maximum-scale=5"
   />
   <title>MineSprint</title>
   <link rel="stylesheet" href="./styles.css" />
@@ -21,10 +21,7 @@
         <h1>MineSprint</h1>
         <div class="subtitle">Сапёр: solo, co-op, versus, комнаты, рейтинг</div>
       </div>
-      <div class="topbar-right">
-        <button id="shareBtn" class="ghost-btn hidden">Поделиться</button>
-        <div class="user-chip" id="userChip">...</div>
-      </div>
+      <div class="user-chip" id="userChip">...</div>
     </header>
 
     <section class="layout">
@@ -60,19 +57,7 @@
             <button class="mini-btn" data-preset="16x16x40">16×16×40</button>
           </div>
           <div class="hint">
-            Можно задавать свою конфигурацию. На backend стоит защита от слишком больших полей.
-          </div>
-        </div>
-
-        <div class="section">
-          <div class="section-title">Управление</div>
-          <div class="segmented">
-            <button class="seg-btn active" data-input="open">Открыть</button>
-            <button class="seg-btn" data-input="flag">Флаг</button>
-          </div>
-          <div class="hint">
-            На ПК: правый клик ставит флаг.<br />
-            На телефоне: переключай режим выше.
+            Поле настраивается вручную. Для больших полей используй кнопку «Открыть поле».
           </div>
         </div>
 
@@ -103,7 +88,7 @@
               </div>
 
               <div class="room-actions">
-                <button id="copyLinkBtn" class="btn btn-secondary">Копировать invite-link</button>
+                <button id="shareBtn" class="btn btn-secondary">Поделиться</button>
                 <button id="leaveRoomBtn" class="btn btn-secondary">Выйти</button>
                 <button id="restartRoomBtn" class="btn btn-primary">Рестарт комнаты</button>
               </div>
@@ -133,6 +118,10 @@
             <div class="stat">
               <span>Ваш счёт</span>
               <strong id="openedValue">0</strong>
+            </div>
+            <div class="stat">
+              <span>Время</span>
+              <strong id="sidebarTimerValue">00:00</strong>
             </div>
           </div>
         </div>
@@ -176,10 +165,24 @@
           <div class="badge badge-warn" id="badge">WAIT</div>
         </div>
 
+        <div class="field-topbar">
+          <div class="field-counter">
+            <span>Мин осталось</span>
+            <strong id="topMinesValue">10</strong>
+          </div>
+          <div class="field-counter">
+            <span>Время</span>
+            <strong id="topTimerValue">00:00</strong>
+          </div>
+          <div class="field-actions">
+            <button id="openFieldBtn" class="ghost-btn">Открыть поле</button>
+          </div>
+        </div>
+
         <div id="playersGrid" class="players-grid hidden"></div>
 
-        <div class="board-wrap">
-          <div id="board" class="board">
+        <div class="board-wrap preview-wrap">
+          <div id="boardPreview" class="board">
             <div class="empty-state">Выбери режим и начни игру</div>
           </div>
 
@@ -190,8 +193,57 @@
             </div>
           </div>
         </div>
+
+        <div class="board-toolbar">
+          <div class="toolbar-title">Касание — открыть · Зажатие — флаг</div>
+          <div class="segmented compact">
+            <button class="seg-btn active" data-input="open">Открыть</button>
+            <button class="seg-btn" data-input="flag">Флаг</button>
+          </div>
+        </div>
       </main>
     </section>
+
+    <div id="fieldModal" class="field-modal hidden">
+      <div class="field-modal-card">
+        <div class="field-modal-header">
+          <button id="closeFieldBtn" class="ghost-btn">Закрыть</button>
+
+          <div class="modal-counters">
+            <div class="field-counter">
+              <span>Мин осталось</span>
+              <strong id="modalMinesValue">10</strong>
+            </div>
+            <div class="field-counter">
+              <span>Время</span>
+              <strong id="modalTimerValue">00:00</strong>
+            </div>
+          </div>
+
+          <div class="zoom-controls">
+            <button id="zoomOutBtn" class="zoom-btn">−</button>
+            <button id="fitZoomBtn" class="zoom-btn">Fit</button>
+            <button id="zoomInBtn" class="zoom-btn">+</button>
+          </div>
+        </div>
+
+        <div class="modal-hint">Касание — открыть · Зажатие — флаг · Правый клик — флаг</div>
+
+        <div id="modalBoardScroll" class="modal-board-scroll">
+          <div id="boardModal" class="board">
+            <div class="empty-state">Нет активной игры</div>
+          </div>
+        </div>
+
+        <div class="board-toolbar modal-toolbar">
+          <div class="toolbar-title">Инструмент по тапу</div>
+          <div class="segmented compact">
+            <button class="seg-btn active" data-input="open">Открыть</button>
+            <button class="seg-btn" data-input="flag">Флаг</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div id="toast" class="toast hidden"></div>
   </div>

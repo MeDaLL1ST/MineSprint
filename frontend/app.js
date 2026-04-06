@@ -5,11 +5,14 @@ tg?.setHeaderColor?.("#0b1020");
 tg?.setBackgroundColor?.("#0b1020");
 
 const ADMIN_TG_ID = "887152362";
+const LONG_PRESS_MS = 380;
+const ZOOM_MIN = 0.7;
+const ZOOM_MAX = 2.8;
+
 const $ = (sel) => document.querySelector(sel);
 
 const els = {
   userChip: $("#userChip"),
-  shareBtn: $("#shareBtn"),
 
   rowsInput: $("#rowsInput"),
   colsInput: $("#colsInput"),
@@ -25,7 +28,7 @@ const els = {
   roomCodeValue: $("#roomCodeValue"),
   roomModeValue: $("#roomModeValue"),
   roomOwnerValue: $("#roomOwnerValue"),
-  copyLinkBtn: $("#copyLinkBtn"),
+  shareBtn: $("#shareBtn"),
   leaveRoomBtn: $("#leaveRoomBtn"),
   restartRoomBtn: $("#restartRoomBtn"),
 
@@ -34,14 +37,29 @@ const els = {
   minesValue: $("#minesValue"),
   flagsValue: $("#flagsValue"),
   openedValue: $("#openedValue"),
+  sidebarTimerValue: $("#sidebarTimerValue"),
+
+  topMinesValue: $("#topMinesValue"),
+  topTimerValue: $("#topTimerValue"),
+  modalMinesValue: $("#modalMinesValue"),
+  modalTimerValue: $("#modalTimerValue"),
+
+  openFieldBtn: $("#openFieldBtn"),
+  closeFieldBtn: $("#closeFieldBtn"),
+  zoomInBtn: $("#zoomInBtn"),
+  zoomOutBtn: $("#zoomOutBtn"),
+  fitZoomBtn: $("#fitZoomBtn"),
 
   statusText: $("#statusText"),
   badge: $("#badge"),
-  board: $("#board"),
+  boardPreview: $("#boardPreview"),
+  boardModal: $("#boardModal"),
+  modalBoardScroll: $("#modalBoardScroll"),
   playersGrid: $("#playersGrid"),
   overlay: $("#overlay"),
   overlayTitle: $("#overlayTitle"),
   overlayActionBtn: $("#overlayActionBtn"),
+  fieldModal: $("#fieldModal"),
 
   refreshLeaderboardBtn: $("#refreshLeaderboardBtn"),
   leaderboardList: $("#leaderboardList"),
@@ -63,6 +81,11 @@ let selectedMode = "solo";
 let inputMode = "open";
 let autoJoinDone = false;
 let reconnectTimer = null;
+let boardZoom = 1;
+let remoteHovers = {};
+let lastHoverCell = null;
+let frozenElapsedSec = 0;
+let lastGameId = "";
 
 const presets = {
   solo: { rows: 9, cols: 9, mines: 10 },
@@ -74,8 +97,10 @@ const user = resolveTelegramUser();
 const initialRoomCode = new URLSearchParams(location.search).get("room")?.toUpperCase() || "";
 
 bindUI();
+applyPresetIfNeeded();
 renderBase();
 loadLeaderboard();
+setInterval(updateTopCounters, 1000);
 
 if (isTelegramReady()) {
   connect();
@@ -116,7 +141,7 @@ function bindUI() {
   document.querySelectorAll("[data-input]").forEach((btn) => {
     btn.addEventListener("click", () => {
       inputMode = btn.dataset.input;
-      renderBase();
+      renderModeButtons();
     });
   });
 
@@ -167,8 +192,7 @@ function bindUI() {
     send({ type: "join_room", code });
   });
 
-  els.copyLinkBtn.addEventListener("click", copyInviteLink);
-  els.shareBtn.addEventListener("click", shareInviteLink);
+  els.shareBtn.addEventListener("click", shareRoomLink);
 
   els.leaveRoomBtn.addEventListener("click", () => {
     send({ type: "leave_room" });
@@ -191,8 +215,37 @@ function bindUI() {
     }
   });
 
+  els.openFieldBtn.addEventListener("click", openFieldModal);
+  els.closeFieldBtn.addEventListener("click", closeFieldModal);
+
+  els.zoomInBtn.addEventListener("click", () => {
+    boardZoom = clamp(boardZoom + 0.15, ZOOM_MIN, ZOOM_MAX);
+    renderBoards();
+  });
+
+  els.zoomOutBtn.addEventListener("click", () => {
+    boardZoom = clamp(boardZoom - 0.15, ZOOM_MIN, ZOOM_MAX);
+    renderBoards();
+  });
+
+  els.fitZoomBtn.addEventListener("click", fitZoom);
+
   els.refreshLeaderboardBtn.addEventListener("click", loadLeaderboard);
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
+
+  els.boardPreview.addEventListener("mouseleave", clearHoverCell);
+  els.boardModal.addEventListener("mouseleave", clearHoverCell);
+
+  els.fieldModal.addEventListener("click", (e) => {
+    if (e.target === els.fieldModal) {
+      closeFieldModal();
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    renderBoards();
+    updateTopCounters();
+  });
 }
 
 function applyPresetIfNeeded() {
@@ -284,15 +337,43 @@ function handleMessage(msg) {
   if (msg.type === "left_room") {
     toast(msg.message || "Вы вышли");
     state = null;
+    remoteHovers = {};
+    clearHoverCell(true);
     render();
     return;
   }
 
+  if (msg.type === "hover") {
+    if (!state?.online) return;
+    if (msg.active && Number.isInteger(msg.cell) && msg.cell >= 0) {
+      remoteHovers[msg.playerId] = msg.cell;
+    } else {
+      delete remoteHovers[msg.playerId];
+    }
+    applyHoverDecorations();
+    return;
+  }
+
   if (msg.type === "state") {
+    const prevGameId = state?.gameId || "";
     state = msg.payload;
     selectedMode = state.mode || selectedMode;
+    remoteHovers = { ...(state.hovers || {}) };
+    clearHoverCell(true);
+
+    if (state.gameId !== prevGameId) {
+      lastGameId = state.gameId;
+      boardZoom = defaultZoomForState(state);
+      frozenElapsedSec = 0;
+    }
+
+    if (state.over) {
+      frozenElapsedSec = computeElapsedSec(state);
+    }
+
     setBadge(state.over ? "DONE" : "ONLINE", state.over ? "warn" : "ok");
     render();
+
     if (state.over) {
       loadLeaderboard();
       if (user.id === ADMIN_TG_ID) loadAdminStats();
@@ -354,14 +435,17 @@ function render() {
   renderBase();
   renderStatus();
   renderPlayers();
-  renderBoard();
+  renderBoards();
   renderOverlay();
+  updateTopCounters();
+  applyHoverDecorations();
 }
 
 function renderModeButtons() {
   document.querySelectorAll("[data-mode]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.mode === selectedMode);
   });
+
   document.querySelectorAll("[data-input]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.input === inputMode);
   });
@@ -374,14 +458,14 @@ function renderModeButtons() {
 function renderRoomControls() {
   const inOnlineState = !!state?.online;
   const isSoloSelected = selectedMode === "solo";
-  const roomLinkAvailable = !!state?.roomCode;
+  const hasRoom = !!state?.roomCode;
 
   els.startSoloBtn.classList.toggle("hidden", !isSoloSelected);
   els.createRoomBtn.classList.toggle("hidden", isSoloSelected || inOnlineState);
   els.joinBox.classList.toggle("hidden", isSoloSelected || inOnlineState);
 
   els.roomCard.classList.toggle("hidden", !inOnlineState);
-  els.shareBtn.classList.toggle("hidden", !roomLinkAvailable);
+  els.shareBtn.classList.toggle("hidden", !hasRoom);
 
   if (inOnlineState) {
     els.roomCodeValue.textContent = state.roomCode || "-";
@@ -409,6 +493,7 @@ function renderStats() {
   els.minesValue.textContent = String(mines);
   els.flagsValue.textContent = String(state?.flagsLeft ?? mines);
   els.openedValue.textContent = String(state?.you?.score ?? 0);
+  updateTopCounters();
 }
 
 function renderPlayers() {
@@ -436,49 +521,146 @@ function renderPlayers() {
   });
 }
 
-function renderBoard() {
+function renderBoards() {
+  renderBoardTo(els.boardPreview, false);
+  renderBoardTo(els.boardModal, true);
+  applyHoverDecorations();
+}
+
+function renderBoardTo(container, modal) {
   if (!state) {
-    els.board.innerHTML = `<div class="empty-state">Выбери режим и начни игру</div>`;
+    container.innerHTML = `<div class="empty-state">Выбери режим и начни игру</div>`;
     return;
   }
 
   const cols = state.cols || 9;
-  const cellSize = getCellSize(cols);
-  els.board.style.setProperty("--cell-size", `${cellSize}px`);
-  els.board.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
-  els.board.innerHTML = "";
+  const baseCellSize = modal ? getModalBaseCellSize(cols) : getPreviewBaseCellSize(cols);
+  const scale = modal ? boardZoom : 1;
+  const cellSize = Math.max(12, Math.round(baseCellSize * scale));
+  const cellFont = Math.max(8, Math.round(cellSize * 0.52));
+  const gap = cellSize <= 14 ? 2 : cellSize <= 20 ? 3 : 4;
+
+  container.style.setProperty("--cell-size", `${cellSize}px`);
+  container.style.setProperty("--cell-font-size", `${cellFont}px`);
+  container.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
+  container.style.gap = `${gap}px`;
+  container.innerHTML = "";
 
   state.board.forEach((cell) => {
     const btn = document.createElement("button");
     btn.className = "cell";
-    btn.dataset.index = cell.i;
+    btn.dataset.index = String(cell.i);
 
     if (cell.o) btn.classList.add("open");
     if (cell.f && !cell.o) btn.classList.add("flagged");
     if (cell.m && (cell.o || state.over)) btn.classList.add("mine");
     if (cell.by && cell.by === state.you.id) btn.classList.add("by-me");
     if (cell.by && cell.by !== state.you.id) btn.classList.add("by-other");
-    if (cell.a) btn.dataset.adj = cell.a;
-
-    btn.addEventListener("click", () => {
-      if (state.over) return;
-      if (inputMode === "flag") {
-        send({ type: "toggle_flag", cell: cell.i });
-      } else {
-        send({ type: "reveal", cell: cell.i });
-      }
-      impact("light");
-    });
-
-    btn.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      if (state.over) return;
-      send({ type: "toggle_flag", cell: cell.i });
-    });
+    if (cell.a) btn.dataset.adj = String(cell.a);
 
     btn.textContent = getCellText(cell);
-    els.board.appendChild(btn);
+    wireCellButton(btn, cell.i);
+    container.appendChild(btn);
   });
+}
+
+function wireCellButton(btn, cellIndex) {
+  btn.addEventListener("mouseenter", () => {
+    sendHoverCell(cellIndex);
+  });
+
+  btn.addEventListener("click", (e) => {
+    if (Date.now() < (btn._ignoreClickUntil || 0)) {
+      e.preventDefault();
+      return;
+    }
+    if (state?.over) return;
+    handlePrimaryAction(cellIndex);
+    impact("light");
+  });
+
+  btn.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    if (state?.over) return;
+    toggleFlag(cellIndex);
+    impact("medium");
+  });
+
+  btn.addEventListener(
+    "touchstart",
+    () => {
+      if (state?.over) return;
+      sendHoverCell(cellIndex);
+      btn._longPressTriggered = false;
+      clearTimeout(btn._touchTimer);
+      btn._touchTimer = setTimeout(() => {
+        btn._longPressTriggered = true;
+        btn._ignoreClickUntil = Date.now() + 500;
+        toggleFlag(cellIndex);
+        impact("medium");
+      }, LONG_PRESS_MS);
+    },
+    { passive: true }
+  );
+
+  btn.addEventListener(
+    "touchend",
+    (e) => {
+      clearTimeout(btn._touchTimer);
+      clearHoverCell();
+
+      if (btn._longPressTriggered) {
+        btn._ignoreClickUntil = Date.now() + 500;
+        e.preventDefault();
+        return;
+      }
+
+      btn._ignoreClickUntil = Date.now() + 500;
+      if (!state?.over) {
+        handlePrimaryAction(cellIndex);
+        impact("light");
+      }
+      e.preventDefault();
+    },
+    { passive: false }
+  );
+
+  btn.addEventListener("touchcancel", () => {
+    clearTimeout(btn._touchTimer);
+    clearHoverCell();
+  });
+}
+
+function handlePrimaryAction(cellIndex) {
+  if (!state || state.over) return;
+  if (inputMode === "flag") {
+    toggleFlag(cellIndex);
+  } else {
+    openCell(cellIndex);
+  }
+}
+
+function openCell(cellIndex) {
+  send({ type: "reveal", cell: cellIndex });
+}
+
+function toggleFlag(cellIndex) {
+  send({ type: "toggle_flag", cell: cellIndex });
+}
+
+function sendHoverCell(cellIndex) {
+  if (!state?.online || state.over) return;
+  if (lastHoverCell === cellIndex) return;
+  lastHoverCell = cellIndex;
+  send({ type: "hover", cell: cellIndex });
+}
+
+function clearHoverCell(silent = false) {
+  if (lastHoverCell === null) return;
+  lastHoverCell = null;
+  if (!silent && state?.online && !state.over) {
+    send({ type: "hover", cell: -1 });
+  }
 }
 
 function renderOverlay() {
@@ -492,11 +674,122 @@ function renderOverlay() {
   els.overlayActionBtn.textContent = state.online ? "Рестарт комнаты" : "Сыграть ещё";
 }
 
+function updateTopCounters() {
+  const minesLeft = state?.flagsLeft ?? getMines();
+  const elapsed = state?.over ? frozenElapsedSec : computeElapsedSec(state);
+
+  const timeText = formatDuration(elapsed);
+
+  els.flagsValue.textContent = String(minesLeft);
+  els.topMinesValue.textContent = String(minesLeft);
+  els.modalMinesValue.textContent = String(minesLeft);
+
+  els.sidebarTimerValue.textContent = timeText;
+  els.topTimerValue.textContent = timeText;
+  els.modalTimerValue.textContent = timeText;
+}
+
+function computeElapsedSec(gameState) {
+  if (!gameState?.startedAt) return 0;
+  const nowSec = Math.floor(Date.now() / 1000);
+  return Math.max(0, nowSec - Number(gameState.startedAt));
+}
+
+function formatDuration(totalSec) {
+  const sec = Math.max(0, Number(totalSec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+
+  if (h > 0) {
+    return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+  }
+  return `${pad2(m)}:${pad2(s)}`;
+}
+
+function pad2(v) {
+  return String(v).padStart(2, "0");
+}
+
+function openFieldModal() {
+  els.fieldModal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  if (state) {
+    fitZoom();
+  }
+}
+
+function closeFieldModal() {
+  els.fieldModal.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+}
+
+function fitZoom() {
+  if (!state) return;
+
+  const cols = state.cols || 9;
+  const rows = state.rows || 9;
+  const base = getModalBaseCellSize(cols);
+  const gap = base <= 14 ? 2 : base <= 20 ? 3 : 4;
+
+  const availW = Math.max(240, window.innerWidth - 90);
+  const availH = Math.max(240, window.innerHeight - 260);
+
+  const totalW = cols * base + Math.max(0, cols - 1) * gap;
+  const totalH = rows * base + Math.max(0, rows - 1) * gap;
+
+  const zoomW = availW / totalW;
+  const zoomH = availH / totalH;
+
+  boardZoom = clamp(Math.min(zoomW, zoomH), ZOOM_MIN, ZOOM_MAX);
+  renderBoards();
+}
+
+function defaultZoomForState(gameState) {
+  if (!gameState) return 1;
+  const maxSide = Math.max(gameState.rows || 0, gameState.cols || 0);
+  if (maxSide >= 24) return 0.95;
+  if (maxSide >= 16) return 1.05;
+  if (maxSide >= 12) return 1.15;
+  return 1.25;
+}
+
+function getPreviewBaseCellSize(cols) {
+  const w = window.innerWidth;
+  if (cols >= 24) return w < 420 ? 11 : w < 700 ? 12 : 13;
+  if (cols >= 16) return w < 420 ? 13 : w < 700 ? 15 : 17;
+  if (cols >= 12) return w < 420 ? 16 : w < 700 ? 18 : 22;
+  return w < 420 ? 24 : 28;
+}
+
+function getModalBaseCellSize(cols) {
+  const w = window.innerWidth;
+  if (cols >= 24) return w < 420 ? 14 : w < 700 ? 16 : 18;
+  if (cols >= 16) return w < 420 ? 18 : w < 700 ? 22 : 26;
+  if (cols >= 12) return w < 420 ? 22 : w < 700 ? 26 : 30;
+  return w < 420 ? 30 : 36;
+}
+
 function getCellText(cell) {
-  if (cell.f && !cell.o) return "🚩";
-  if (cell.m && (cell.o || state?.over)) return "💣";
+  if (cell.f && !cell.o) return "⚑";
+  if (cell.m && (cell.o || state?.over)) return "✹";
   if (cell.o && cell.a > 0) return String(cell.a);
   return "";
+}
+
+function applyHoverDecorations() {
+  const hovered = new Set();
+
+  Object.entries(remoteHovers || {}).forEach(([playerId, cell]) => {
+    if (playerId === state?.you?.id) return;
+    if (Number.isInteger(cell) && cell >= 0) {
+      hovered.add(String(cell));
+    }
+  });
+
+  document.querySelectorAll(".cell[data-index]").forEach((cellEl) => {
+    cellEl.classList.toggle("hovered-by-other", hovered.has(cellEl.dataset.index));
+  });
 }
 
 function prettyMode(mode) {
@@ -505,42 +798,35 @@ function prettyMode(mode) {
   return "Solo";
 }
 
-function getInviteLink() {
+function getShareLink() {
   if (!state?.roomCode) return "";
-  if (state.inviteLink?.startsWith("http")) return state.inviteLink;
-  return `${location.origin}/?room=${state.roomCode}`;
+  return state.shareLink || state.inviteLink || `${location.origin}/?room=${state.roomCode}`;
 }
 
-async function copyInviteLink() {
-  const link = getInviteLink();
-  if (!link) {
-    toast("Нет активной комнаты");
-    return;
-  }
-  await navigator.clipboard.writeText(link);
-  toast("Invite-link скопирован");
-}
-
-async function shareInviteLink() {
-  const link = getInviteLink();
+async function shareRoomLink() {
+  const link = getShareLink();
   if (!link) {
     toast("Нет активной комнаты");
     return;
   }
 
-  if (navigator.share) {
-    try {
+  try {
+    if (navigator.share) {
       await navigator.share({
         title: "MineSprint",
-        text: "Заходи в комнату",
+        text: "Зайди в мою комнату MineSprint",
         url: link,
       });
       return;
-    } catch (_) {}
-  }
+    }
+  } catch (_) {}
 
-  await navigator.clipboard.writeText(link);
-  toast("Ссылка скопирована");
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Ссылка бота скопирована");
+  } catch (_) {
+    toast(link);
+  }
 }
 
 async function loadLeaderboard() {
@@ -592,7 +878,7 @@ async function loadAdminStats() {
     }
     adminStats = data;
     renderAdmin();
-  } catch (e) {
+  } catch (_) {
     els.adminSummary.innerHTML = `<div class="placeholder">Не удалось загрузить админку</div>`;
   }
 }
@@ -643,12 +929,8 @@ function renderAdmin() {
     : `<div class="placeholder">Нет данных</div>`;
 }
 
-function getCellSize(cols) {
-  const w = window.innerWidth;
-  if (cols >= 24) return w < 420 ? 14 : w < 560 ? 16 : 18;
-  if (cols >= 16) return w < 420 ? 18 : w < 560 ? 20 : 24;
-  if (cols >= 12) return w < 420 ? 22 : w < 560 ? 26 : 30;
-  return w < 420 ? 30 : 36;
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
 }
 
 function escapeHtml(value) {

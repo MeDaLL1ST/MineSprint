@@ -109,13 +109,19 @@ func cloneGame(g *Game) *Game {
 	out.Players = append([]string{}, g.Players...)
 	out.Names = map[string]string{}
 	out.Scores = map[string]int{}
+	out.Hovers = map[string]int{}
 	out.Board = append([]Cell{}, g.Board...)
+
 	for k, v := range g.Names {
 		out.Names[k] = v
 	}
 	for k, v := range g.Scores {
 		out.Scores[k] = v
 	}
+	for k, v := range g.Hovers {
+		out.Hovers[k] = v
+	}
+
 	return &out
 }
 

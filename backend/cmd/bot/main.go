@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/url"
 	"strings"
 
 	"tg-minesweeper/backend/internal/app"
@@ -44,16 +45,36 @@ func main() {
 		if update.Message.IsCommand() {
 			switch update.Message.Command() {
 			case "start", "app":
-				sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL)
+				roomCode := parseRoomCode(update.Message.CommandArguments())
+				sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, roomCode)
 				continue
 			}
 		}
 
 		text := strings.TrimSpace(update.Message.Text)
 		if text != "" {
-			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL)
+			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "")
 		}
 	}
+}
+
+func parseRoomCode(arg string) string {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(arg), "room_") {
+		arg = arg[5:]
+	}
+	arg = strings.ToUpper(strings.TrimSpace(arg))
+	return arg
+}
+
+func buildAppURL(base, roomCode string) string {
+	if roomCode == "" {
+		return base
+	}
+	return base + "/?room=" + url.QueryEscape(roomCode)
 }
 
 type webAppInfo struct {
@@ -69,14 +90,21 @@ type webAppKeyboard struct {
 	InlineKeyboard [][]webAppButton `json:"inline_keyboard"`
 }
 
-func sendOpenApp(bot *tgbotapi.BotAPI, chatID int64, appURL string) {
+func sendOpenApp(bot *tgbotapi.BotAPI, chatID int64, baseURL, roomCode string) {
+	appURL := buildAppURL(baseURL, roomCode)
+
+	text := "Запусти игру кнопкой ниже."
+	if roomCode != "" {
+		text = "Запусти игру и зайди в комнату " + roomCode + "."
+	}
+
 	markup := webAppKeyboard{
 		InlineKeyboard: [][]webAppButton{{
 			{Text: "Открыть MineSweeper", WebApp: &webAppInfo{URL: appURL}},
 		}},
 	}
 
-	msg := tgbotapi.NewMessage(chatID, "Запусти игру кнопкой ниже.")
+	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ReplyMarkup = markup
 
 	_, _ = bot.Send(msg)
