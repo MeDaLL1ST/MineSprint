@@ -6,6 +6,7 @@ tg?.setBackgroundColor?.("#0b1020");
 
 const ADMIN_TG_ID = "887152362";
 const LONG_PRESS_MS = 380;
+const DRAG_THRESHOLD = 10;
 const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 2.8;
 
@@ -71,6 +72,8 @@ const els = {
   adminRecentMatches: $("#adminRecentMatches"),
 
   toast: $("#toast"),
+
+  boardCard: document.querySelector(".board-card"),
 };
 
 let ws = null;
@@ -84,6 +87,9 @@ let boardZoom = 1;
 let remoteHovers = {};
 let lastHoverCell = null;
 let frozenElapsedSec = 0;
+let pinchGesture = null;
+
+const activeTouchTimers = new Set();
 
 const presets = {
   solo: { rows: 9, cols: 9, mines: 10 },
@@ -137,8 +143,7 @@ function bindUI() {
 
   document.querySelectorAll("[data-input]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      inputMode = btn.dataset.input;
-      renderModeButtons();
+      toggleInputMode();
     });
   });
 
@@ -160,15 +165,18 @@ function bindUI() {
   });
 
   els.startSoloBtn.addEventListener("click", () => {
+    indicateGameAction("Создаём игру...");
     send({
       type: "start_solo",
       rows: getRows(),
       cols: getCols(),
       mines: getMines(),
     });
+    impact("light");
   });
 
   els.createRoomBtn.addEventListener("click", () => {
+    indicateGameAction("Создаём комнату...");
     send({
       type: "create_room",
       mode: selectedMode,
@@ -185,13 +193,14 @@ function bindUI() {
       toast("Введи код комнаты");
       return;
     }
+    indicateGameAction("Подключаемся к комнате...");
     send({ type: "join_room", code });
+    impact("light");
   });
 
   els.shareBtn.addEventListener("click", shareRoomLink);
   els.leaveRoomBtn.addEventListener("click", () => send({ type: "leave_room" }));
   els.restartRoomBtn.addEventListener("click", restartCurrentGame);
-
   els.overlayActionBtn.addEventListener("click", restartCurrentGame);
   els.modalRestartBtn.addEventListener("click", restartCurrentGame);
 
@@ -199,13 +208,11 @@ function bindUI() {
   els.closeFieldBtn.addEventListener("click", closeFieldModal);
 
   els.zoomInBtn.addEventListener("click", () => {
-    boardZoom = clamp(boardZoom + 0.15, ZOOM_MIN, ZOOM_MAX);
-    renderBoards();
+    zoomKeepingViewport(clamp(boardZoom + 0.15, ZOOM_MIN, ZOOM_MAX));
   });
 
   els.zoomOutBtn.addEventListener("click", () => {
-    boardZoom = clamp(boardZoom - 0.15, ZOOM_MIN, ZOOM_MAX);
-    renderBoards();
+    zoomKeepingViewport(clamp(boardZoom - 0.15, ZOOM_MIN, ZOOM_MAX));
   });
 
   els.fitZoomBtn.addEventListener("click", fitZoom);
@@ -219,13 +226,29 @@ function bindUI() {
     if (e.target === els.fieldModal) closeFieldModal();
   });
 
+  els.modalBoardScroll.addEventListener("touchstart", handleModalGestureStart, { passive: false });
+  els.modalBoardScroll.addEventListener("touchmove", handleModalGestureMove, { passive: false });
+  els.modalBoardScroll.addEventListener("touchend", handleModalGestureEnd, { passive: false });
+  els.modalBoardScroll.addEventListener("touchcancel", handleModalGestureEnd, { passive: false });
+
+  els.modalBoardScroll.addEventListener("contextmenu", (e) => e.preventDefault());
+  els.boardModal.addEventListener("contextmenu", (e) => e.preventDefault());
+  els.boardPreview.addEventListener("contextmenu", (e) => e.preventDefault());
+
   window.addEventListener("resize", () => {
     renderBoards();
     updateTopCounters();
   });
 }
 
+function toggleInputMode() {
+  inputMode = inputMode === "open" ? "flag" : "open";
+  renderModeButtons();
+  toast(inputMode === "open" ? "Режим: открыть" : "Режим: флаг");
+}
+
 function restartCurrentGame() {
+  indicateGameAction("Перезапускаем...");
   if (state?.online) {
     send({ type: "restart_room" });
   } else {
@@ -236,6 +259,18 @@ function restartCurrentGame() {
       mines: state?.mines || getMines(),
     });
   }
+  impact("light");
+}
+
+function indicateGameAction(text) {
+  setStatus(text);
+  setBadge("WAIT", "warn");
+  toast(text);
+  scrollToGame();
+}
+
+function scrollToGame() {
+  els.boardCard?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function applyPresetIfNeeded() {
@@ -286,6 +321,7 @@ function connect() {
     setStatus("Соединение установлено");
     if (initialRoomCode && !autoJoinDone) {
       autoJoinDone = true;
+      indicateGameAction("Подключаемся к комнате...");
       send({ type: "join_room", code: initialRoomCode });
     }
   };
@@ -409,7 +445,7 @@ function toast(text) {
   clearTimeout(els.toast._timer);
   els.toast._timer = setTimeout(() => {
     els.toast.classList.add("hidden");
-  }, 2200);
+  }, 1800);
 }
 
 function renderBase() {
@@ -550,12 +586,12 @@ function renderBoardTo(container, modal) {
     if (cell.a) btn.dataset.adj = String(cell.a);
 
     btn.textContent = getCellText(cell);
-    wireCellButton(btn, cell.i);
+    wireCellButton(btn, cell.i, modal);
     container.appendChild(btn);
   });
 }
 
-function wireCellButton(btn, cellIndex) {
+function wireCellButton(btn, cellIndex, modal) {
   btn.addEventListener("mouseenter", () => {
     sendHoverCell(cellIndex);
   });
@@ -579,16 +615,56 @@ function wireCellButton(btn, cellIndex) {
     "touchstart",
     (e) => {
       if (state?.over) return;
+      if (e.touches.length > 1) return;
+
       e.preventDefault();
       sendHoverCell(cellIndex);
+
+      const touch = e.touches[0];
+      btn._touchStartX = touch.clientX;
+      btn._touchStartY = touch.clientY;
+      btn._startScrollLeft = els.modalBoardScroll.scrollLeft;
+      btn._startScrollTop = els.modalBoardScroll.scrollTop;
+      btn._dragging = false;
       btn._longPressTriggered = false;
-      clearTimeout(btn._touchTimer);
-      btn._touchTimer = setTimeout(() => {
+
+      clearButtonTouchTimer(btn);
+
+      const timer = setTimeout(() => {
+        activeTouchTimers.delete(timer);
+        btn._touchTimer = null;
+
+        if (pinchGesture || btn._dragging || state?.over) return;
+
         btn._longPressTriggered = true;
         btn._ignoreClickUntil = Date.now() + 500;
         toggleFlag(cellIndex);
         impact("medium");
       }, LONG_PRESS_MS);
+
+      btn._touchTimer = timer;
+      activeTouchTimers.add(timer);
+    },
+    { passive: false }
+  );
+
+  btn.addEventListener(
+    "touchmove",
+    (e) => {
+      if (pinchGesture || e.touches.length !== 1) return;
+
+      const touch = e.touches[0];
+      const dx = touch.clientX - (btn._touchStartX || touch.clientX);
+      const dy = touch.clientY - (btn._touchStartY || touch.clientY);
+
+      if (modal && (btn._dragging || Math.hypot(dx, dy) > DRAG_THRESHOLD)) {
+        btn._dragging = true;
+        clearButtonTouchTimer(btn);
+        btn._ignoreClickUntil = Date.now() + 500;
+        els.modalBoardScroll.scrollLeft = (btn._startScrollLeft || 0) - dx;
+        els.modalBoardScroll.scrollTop = (btn._startScrollTop || 0) - dy;
+        e.preventDefault();
+      }
     },
     { passive: false }
   );
@@ -596,8 +672,14 @@ function wireCellButton(btn, cellIndex) {
   btn.addEventListener(
     "touchend",
     (e) => {
-      clearTimeout(btn._touchTimer);
       clearHoverCell();
+
+      if (btn._dragging) {
+        clearButtonTouchTimer(btn);
+        btn._ignoreClickUntil = Date.now() + 500;
+        e.preventDefault();
+        return;
+      }
 
       if (btn._longPressTriggered) {
         btn._ignoreClickUntil = Date.now() + 500;
@@ -605,8 +687,10 @@ function wireCellButton(btn, cellIndex) {
         return;
       }
 
+      clearButtonTouchTimer(btn);
       btn._ignoreClickUntil = Date.now() + 500;
-      if (!state?.over) {
+
+      if (!state?.over && !pinchGesture) {
         handlePrimaryAction(cellIndex);
       }
       e.preventDefault();
@@ -615,9 +699,21 @@ function wireCellButton(btn, cellIndex) {
   );
 
   btn.addEventListener("touchcancel", () => {
-    clearTimeout(btn._touchTimer);
+    clearButtonTouchTimer(btn);
     clearHoverCell();
   });
+}
+
+function clearButtonTouchTimer(btn) {
+  if (!btn?._touchTimer) return;
+  clearTimeout(btn._touchTimer);
+  activeTouchTimers.delete(btn._touchTimer);
+  btn._touchTimer = null;
+}
+
+function cancelAllTouchTimers() {
+  activeTouchTimers.forEach((timer) => clearTimeout(timer));
+  activeTouchTimers.clear();
 }
 
 function handlePrimaryAction(cellIndex) {
@@ -650,6 +746,74 @@ function clearHoverCell(silent = false) {
   if (!silent && state?.online && !state.over) {
     send({ type: "hover", cell: -1 });
   }
+}
+
+function handleModalGestureStart(e) {
+  if (e.touches.length === 2) {
+    cancelAllTouchTimers();
+    pinchGesture = {
+      startDistance: touchesDistance(e.touches[0], e.touches[1]),
+      startZoom: boardZoom,
+    };
+    e.preventDefault();
+  }
+}
+
+function handleModalGestureMove(e) {
+  if (e.touches.length !== 2) return;
+  if (!pinchGesture) {
+    pinchGesture = {
+      startDistance: touchesDistance(e.touches[0], e.touches[1]),
+      startZoom: boardZoom,
+    };
+  }
+
+  const rect = els.modalBoardScroll.getBoundingClientRect();
+  const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+  const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+  const distance = touchesDistance(e.touches[0], e.touches[1]);
+  const nextZoom = clamp(
+    pinchGesture.startZoom * (distance / Math.max(1, pinchGesture.startDistance)),
+    ZOOM_MIN,
+    ZOOM_MAX
+  );
+
+  zoomKeepingViewport(nextZoom, { x: centerX, y: centerY });
+  e.preventDefault();
+}
+
+function handleModalGestureEnd(e) {
+  if (e.touches.length < 2) {
+    pinchGesture = null;
+  }
+}
+
+function touchesDistance(a, b) {
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+function zoomKeepingViewport(nextZoom, anchor = null) {
+  if (!state) return;
+
+  const scroll = els.modalBoardScroll;
+  const rect = scroll.getBoundingClientRect();
+  const oldZoom = boardZoom;
+
+  if (Math.abs(nextZoom - oldZoom) < 0.001) return;
+
+  const anchorX = anchor?.x ?? rect.width / 2;
+  const anchorY = anchor?.y ?? rect.height / 2;
+  const contentX = scroll.scrollLeft + anchorX;
+  const contentY = scroll.scrollTop + anchorY;
+  const ratio = nextZoom / oldZoom;
+
+  boardZoom = nextZoom;
+  renderBoards();
+
+  requestAnimationFrame(() => {
+    scroll.scrollLeft = Math.max(0, contentX * ratio - anchorX);
+    scroll.scrollTop = Math.max(0, contentY * ratio - anchorY);
+  });
 }
 
 function renderOverlay() {
@@ -733,8 +897,7 @@ function fitZoom() {
   const zoomW = availW / totalW;
   const zoomH = availH / totalH;
 
-  boardZoom = clamp(Math.min(zoomW, zoomH), ZOOM_MIN, ZOOM_MAX);
-  renderBoards();
+  zoomKeepingViewport(clamp(Math.min(zoomW, zoomH), ZOOM_MIN, ZOOM_MAX));
 }
 
 function defaultZoomForState(gameState) {

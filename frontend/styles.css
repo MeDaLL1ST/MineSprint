@@ -821,6 +821,8 @@ h1 {
     var(--card-strong);
   padding: 16px;
   display: block;
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .modal-toolbar {
