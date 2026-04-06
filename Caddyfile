@@ -1,0 +1,8 @@
+{$DOMAIN} {
+	encode gzip zstd
+
+	@backend path /api/* /health /ws
+	reverse_proxy @backend backend:8080
+
+	reverse_proxy frontend:80
+}
