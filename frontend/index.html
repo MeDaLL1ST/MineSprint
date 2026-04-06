@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=yes, maximum-scale=5"
+    content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, maximum-scale=1"
   />
   <title>MineSprint</title>
   <link rel="stylesheet" href="./styles.css" />
@@ -40,15 +40,45 @@
           <div class="config-grid">
             <label class="field">
               <span>Rows</span>
-              <input id="rowsInput" type="number" min="5" max="30" value="9" />
+              <input
+                id="rowsInput"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
+                value="9"
+              />
             </label>
             <label class="field">
               <span>Cols</span>
-              <input id="colsInput" type="number" min="5" max="30" value="9" />
+              <input
+                id="colsInput"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
+                value="9"
+              />
             </label>
             <label class="field">
               <span>Mines</span>
-              <input id="minesInput" type="number" min="1" value="10" />
+              <input
+                id="minesInput"
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
+                value="10"
+              />
             </label>
           </div>
           <div class="preset-row">
@@ -239,8 +269,10 @@
         <div class="modal-hint">Касание — открыть · Зажатие — флаг · Правый клик — флаг</div>
 
         <div id="modalBoardScroll" class="modal-board-scroll">
-          <div id="boardModal" class="board">
-            <div class="empty-state">Нет активной игры</div>
+          <div id="modalStage" class="modal-stage">
+            <div id="boardModal" class="board">
+              <div class="empty-state">Нет активной игры</div>
+            </div>
           </div>
         </div>
 

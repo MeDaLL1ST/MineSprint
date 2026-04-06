@@ -51,7 +51,8 @@ body.modal-open {
 button,
 .board,
 .cell,
-.empty-state {
+.empty-state,
+input {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -245,16 +246,10 @@ h1 {
   font-size: 12px;
 }
 
-.text-input,
-.field input {
-  width: 100%;
-  border: 1px solid var(--line);
-  background: rgba(255,255,255,0.05);
-  color: var(--text);
-  border-radius: 14px;
-  padding: 12px 12px;
-  outline: none;
-  font-size: 15px;
+.field input,
+.text-input {
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .preset-row {
@@ -813,7 +808,7 @@ h1 {
 
 .modal-board-scroll {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   border-radius: 18px;
   border: 1px solid var(--line);
   background:
@@ -821,12 +816,20 @@ h1 {
     var(--card-strong);
   padding: 16px;
   display: block;
+  position: relative;
   touch-action: none;
   overscroll-behavior: contain;
 }
 
 .modal-toolbar {
   margin-top: 0;
+}
+
+.modal-stage {
+  width: max-content;
+  transform-origin: 0 0;
+  will-change: transform;
+  touch-action: none;
 }
 
 .toast {

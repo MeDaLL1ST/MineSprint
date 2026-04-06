@@ -56,6 +56,7 @@ const els = {
   badge: $("#badge"),
   boardPreview: $("#boardPreview"),
   boardModal: $("#boardModal"),
+  modalStage: $("#modalStage"),
   modalBoardScroll: $("#modalBoardScroll"),
   playersGrid: $("#playersGrid"),
   overlay: $("#overlay"),
@@ -72,7 +73,6 @@ const els = {
   adminRecentMatches: $("#adminRecentMatches"),
 
   toast: $("#toast"),
-
   boardCard: document.querySelector(".board-card"),
 };
 
@@ -83,11 +83,17 @@ let selectedMode = "solo";
 let inputMode = "open";
 let autoJoinDone = false;
 let reconnectTimer = null;
-let boardZoom = 1;
 let remoteHovers = {};
 let lastHoverCell = null;
 let frozenElapsedSec = 0;
+
+let modalScale = 1;
+let modalOffsetX = 0;
+let modalOffsetY = 0;
+let panGesture = null;
 let pinchGesture = null;
+let mousePan = null;
+let suppressTapUntil = 0;
 
 const activeTouchTimers = new Set();
 
@@ -150,17 +156,24 @@ function bindUI() {
   document.querySelectorAll("[data-preset]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const [rows, cols, mines] = btn.dataset.preset.split("x").map(Number);
-      els.rowsInput.value = rows;
-      els.colsInput.value = cols;
-      els.minesInput.value = mines;
+      els.rowsInput.value = String(rows);
+      els.colsInput.value = String(cols);
+      els.minesInput.value = String(mines);
       renderStats();
     });
   });
 
   [els.rowsInput, els.colsInput, els.minesInput].forEach((input) => {
     input.addEventListener("input", () => {
+      sanitizeNumericInput(input);
+      renderStats();
+    });
+    input.addEventListener("blur", () => {
       normalizeInputs();
       renderStats();
+    });
+    input.addEventListener("focus", () => {
+      input.select?.();
     });
   });
 
@@ -208,11 +221,11 @@ function bindUI() {
   els.closeFieldBtn.addEventListener("click", closeFieldModal);
 
   els.zoomInBtn.addEventListener("click", () => {
-    zoomKeepingViewport(clamp(boardZoom + 0.15, ZOOM_MIN, ZOOM_MAX));
+    zoomKeepingViewport(clamp(modalScale + 0.15, ZOOM_MIN, ZOOM_MAX));
   });
 
   els.zoomOutBtn.addEventListener("click", () => {
-    zoomKeepingViewport(clamp(boardZoom - 0.15, ZOOM_MIN, ZOOM_MAX));
+    zoomKeepingViewport(clamp(modalScale - 0.15, ZOOM_MIN, ZOOM_MAX));
   });
 
   els.fitZoomBtn.addEventListener("click", fitZoom);
@@ -231,6 +244,10 @@ function bindUI() {
   els.modalBoardScroll.addEventListener("touchend", handleModalGestureEnd, { passive: false });
   els.modalBoardScroll.addEventListener("touchcancel", handleModalGestureEnd, { passive: false });
 
+  els.modalBoardScroll.addEventListener("mousedown", handleMousePanStart);
+  window.addEventListener("mousemove", handleMousePanMove);
+  window.addEventListener("mouseup", handleMousePanEnd);
+
   els.modalBoardScroll.addEventListener("contextmenu", (e) => e.preventDefault());
   els.boardModal.addEventListener("contextmenu", (e) => e.preventDefault());
   els.boardPreview.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -239,6 +256,17 @@ function bindUI() {
     renderBoards();
     updateTopCounters();
   });
+}
+
+function sanitizeNumericInput(input) {
+  input.value = String(input.value || "").replace(/[^\d]/g, "");
+}
+
+function getInputPreviewValue(input, fallback) {
+  const raw = String(input.value || "").trim();
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function toggleInputMode() {
@@ -275,20 +303,25 @@ function scrollToGame() {
 
 function applyPresetIfNeeded() {
   const preset = presets[selectedMode] || presets.solo;
-  els.rowsInput.value = preset.rows;
-  els.colsInput.value = preset.cols;
-  els.minesInput.value = preset.mines;
+  els.rowsInput.value = String(preset.rows);
+  els.colsInput.value = String(preset.cols);
+  els.minesInput.value = String(preset.mines);
 }
 
 function normalizeInputs() {
-  const rows = Math.max(5, Math.min(30, Number(els.rowsInput.value || 9)));
-  const cols = Math.max(5, Math.min(30, Number(els.colsInput.value || 9)));
-  const maxMines = Math.max(1, rows * cols - 1);
-  const mines = Math.max(1, Math.min(maxMines, Number(els.minesInput.value || 10)));
+  let rows = getInputPreviewValue(els.rowsInput, 9);
+  let cols = getInputPreviewValue(els.colsInput, 9);
 
-  els.rowsInput.value = rows;
-  els.colsInput.value = cols;
-  els.minesInput.value = mines;
+  rows = clamp(rows, 5, 30);
+  cols = clamp(cols, 5, 30);
+
+  const maxMines = Math.max(1, rows * cols - 1);
+  let mines = getInputPreviewValue(els.minesInput, Math.min(10, maxMines));
+  mines = clamp(mines, 1, maxMines);
+
+  els.rowsInput.value = String(rows);
+  els.colsInput.value = String(cols);
+  els.minesInput.value = String(mines);
 }
 
 function getRows() {
@@ -388,7 +421,9 @@ function handleMessage(msg) {
     clearHoverCell(true);
 
     if (state.gameId !== prevGameId) {
-      boardZoom = defaultZoomForState(state);
+      modalScale = defaultZoomForState(state);
+      modalOffsetX = 0;
+      modalOffsetY = 0;
       frozenElapsedSec = 0;
     }
 
@@ -507,9 +542,10 @@ function renderStatus() {
 }
 
 function renderStats() {
-  const rows = state?.rows || getRows();
-  const cols = state?.cols || getCols();
-  const mines = state?.mines || getMines();
+  const rows = state?.rows || getInputPreviewValue(els.rowsInput, 9);
+  const cols = state?.cols || getInputPreviewValue(els.colsInput, 9);
+  const previewMaxMines = Math.max(1, rows * cols - 1);
+  const mines = state?.mines || clamp(getInputPreviewValue(els.minesInput, 10), 1, previewMaxMines);
 
   els.modeValue.textContent = prettyMode(state?.mode || selectedMode);
   els.sizeValue.textContent = `${rows}×${cols}`;
@@ -551,7 +587,12 @@ function renderPlayers() {
 function renderBoards() {
   renderBoardTo(els.boardPreview, false);
   renderBoardTo(els.boardModal, true);
-  applyHoverDecorations();
+
+  requestAnimationFrame(() => {
+    clampModalTransform();
+    applyModalTransform();
+    applyHoverDecorations();
+  });
 }
 
 function renderBoardTo(container, modal) {
@@ -561,9 +602,7 @@ function renderBoardTo(container, modal) {
   }
 
   const cols = state.cols || 9;
-  const baseCellSize = modal ? getModalBaseCellSize(cols) : getPreviewBaseCellSize(cols);
-  const scale = modal ? boardZoom : 1;
-  const cellSize = Math.max(12, Math.round(baseCellSize * scale));
+  const cellSize = modal ? getModalBaseCellSize(cols) : getPreviewBaseCellSize(cols);
   const cellFont = Math.max(8, Math.round(cellSize * 0.5));
   const gap = cellSize <= 14 ? 2 : cellSize <= 20 ? 3 : 4;
 
@@ -586,18 +625,18 @@ function renderBoardTo(container, modal) {
     if (cell.a) btn.dataset.adj = String(cell.a);
 
     btn.textContent = getCellText(cell);
-    wireCellButton(btn, cell.i, modal);
+    wireCellButton(btn, cell.i);
     container.appendChild(btn);
   });
 }
 
-function wireCellButton(btn, cellIndex, modal) {
+function wireCellButton(btn, cellIndex) {
   btn.addEventListener("mouseenter", () => {
     sendHoverCell(cellIndex);
   });
 
   btn.addEventListener("click", (e) => {
-    if (Date.now() < (btn._ignoreClickUntil || 0)) {
+    if (Date.now() < suppressTapUntil || Date.now() < (btn._ignoreClickUntil || 0)) {
       e.preventDefault();
       return;
     }
@@ -619,22 +658,14 @@ function wireCellButton(btn, cellIndex, modal) {
 
       e.preventDefault();
       sendHoverCell(cellIndex);
-
-      const touch = e.touches[0];
-      btn._touchStartX = touch.clientX;
-      btn._touchStartY = touch.clientY;
-      btn._startScrollLeft = els.modalBoardScroll.scrollLeft;
-      btn._startScrollTop = els.modalBoardScroll.scrollTop;
-      btn._dragging = false;
       btn._longPressTriggered = false;
-
       clearButtonTouchTimer(btn);
 
       const timer = setTimeout(() => {
         activeTouchTimers.delete(timer);
         btn._touchTimer = null;
 
-        if (pinchGesture || btn._dragging || state?.over) return;
+        if (pinchGesture || (panGesture && panGesture.active) || state?.over) return;
 
         btn._longPressTriggered = true;
         btn._ignoreClickUntil = Date.now() + 500;
@@ -649,39 +680,12 @@ function wireCellButton(btn, cellIndex, modal) {
   );
 
   btn.addEventListener(
-    "touchmove",
-    (e) => {
-      if (pinchGesture || e.touches.length !== 1) return;
-
-      const touch = e.touches[0];
-      const dx = touch.clientX - (btn._touchStartX || touch.clientX);
-      const dy = touch.clientY - (btn._touchStartY || touch.clientY);
-
-      if (modal && (btn._dragging || Math.hypot(dx, dy) > DRAG_THRESHOLD)) {
-        btn._dragging = true;
-        clearButtonTouchTimer(btn);
-        btn._ignoreClickUntil = Date.now() + 500;
-        els.modalBoardScroll.scrollLeft = (btn._startScrollLeft || 0) - dx;
-        els.modalBoardScroll.scrollTop = (btn._startScrollTop || 0) - dy;
-        e.preventDefault();
-      }
-    },
-    { passive: false }
-  );
-
-  btn.addEventListener(
     "touchend",
     (e) => {
       clearHoverCell();
 
-      if (btn._dragging) {
+      if (btn._longPressTriggered || Date.now() < suppressTapUntil || pinchGesture) {
         clearButtonTouchTimer(btn);
-        btn._ignoreClickUntil = Date.now() + 500;
-        e.preventDefault();
-        return;
-      }
-
-      if (btn._longPressTriggered) {
         btn._ignoreClickUntil = Date.now() + 500;
         e.preventDefault();
         return;
@@ -690,7 +694,7 @@ function wireCellButton(btn, cellIndex, modal) {
       clearButtonTouchTimer(btn);
       btn._ignoreClickUntil = Date.now() + 500;
 
-      if (!state?.over && !pinchGesture) {
+      if (!state?.over) {
         handlePrimaryAction(cellIndex);
       }
       e.preventDefault();
@@ -749,71 +753,211 @@ function clearHoverCell(silent = false) {
 }
 
 function handleModalGestureStart(e) {
+  if (!state || els.fieldModal.classList.contains("hidden")) return;
+
   if (e.touches.length === 2) {
     cancelAllTouchTimers();
+    const rect = els.modalBoardScroll.getBoundingClientRect();
+    const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left;
+    const centerY = ((e.touches[0].clientY + e.touches[1].clientY) / 2) - rect.top;
+
     pinchGesture = {
       startDistance: touchesDistance(e.touches[0], e.touches[1]),
-      startZoom: boardZoom,
+      startScale: modalScale,
+      boardX: (centerX - modalOffsetX) / modalScale,
+      boardY: (centerY - modalOffsetY) / modalScale,
+    };
+
+    panGesture = null;
+    suppressTapUntil = Date.now() + 300;
+    e.preventDefault();
+    return;
+  }
+
+  if (e.touches.length === 1 && !pinchGesture) {
+    const touch = e.touches[0];
+    panGesture = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      startOffsetX: modalOffsetX,
+      startOffsetY: modalOffsetY,
+      active: false,
     };
     e.preventDefault();
   }
 }
 
 function handleModalGestureMove(e) {
-  if (e.touches.length !== 2) return;
-  if (!pinchGesture) {
-    pinchGesture = {
-      startDistance: touchesDistance(e.touches[0], e.touches[1]),
-      startZoom: boardZoom,
-    };
+  if (!state || els.fieldModal.classList.contains("hidden")) return;
+
+  if (e.touches.length === 2) {
+    if (!pinchGesture) {
+      const rect = els.modalBoardScroll.getBoundingClientRect();
+      const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left;
+      const centerY = ((e.touches[0].clientY + e.touches[1].clientY) / 2) - rect.top;
+
+      pinchGesture = {
+        startDistance: touchesDistance(e.touches[0], e.touches[1]),
+        startScale: modalScale,
+        boardX: (centerX - modalOffsetX) / modalScale,
+        boardY: (centerY - modalOffsetY) / modalScale,
+      };
+    }
+
+    cancelAllTouchTimers();
+
+    const rect = els.modalBoardScroll.getBoundingClientRect();
+    const centerX = ((e.touches[0].clientX + e.touches[1].clientX) / 2) - rect.left;
+    const centerY = ((e.touches[0].clientY + e.touches[1].clientY) / 2) - rect.top;
+    const distance = touchesDistance(e.touches[0], e.touches[1]);
+    const nextScale = clamp(
+      pinchGesture.startScale * (distance / Math.max(1, pinchGesture.startDistance)),
+      ZOOM_MIN,
+      ZOOM_MAX
+    );
+
+    modalScale = nextScale;
+    modalOffsetX = centerX - pinchGesture.boardX * modalScale;
+    modalOffsetY = centerY - pinchGesture.boardY * modalScale;
+    clampModalTransform();
+    applyModalTransform();
+
+    suppressTapUntil = Date.now() + 300;
+    e.preventDefault();
+    return;
   }
 
-  const rect = els.modalBoardScroll.getBoundingClientRect();
-  const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-  const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
-  const distance = touchesDistance(e.touches[0], e.touches[1]);
-  const nextZoom = clamp(
-    pinchGesture.startZoom * (distance / Math.max(1, pinchGesture.startDistance)),
-    ZOOM_MIN,
-    ZOOM_MAX
-  );
+  if (e.touches.length === 1 && panGesture && !pinchGesture) {
+    const touch = e.touches[0];
+    const dx = touch.clientX - panGesture.startX;
+    const dy = touch.clientY - panGesture.startY;
 
-  zoomKeepingViewport(nextZoom, { x: centerX, y: centerY });
-  e.preventDefault();
+    if (!panGesture.active && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      panGesture.active = true;
+      cancelAllTouchTimers();
+      suppressTapUntil = Date.now() + 300;
+    }
+
+    if (panGesture.active) {
+      modalOffsetX = panGesture.startOffsetX + dx;
+      modalOffsetY = panGesture.startOffsetY + dy;
+      clampModalTransform();
+      applyModalTransform();
+      e.preventDefault();
+    }
+  }
 }
 
 function handleModalGestureEnd(e) {
-  if (e.touches.length < 2) {
+  if (e.touches.length === 0) {
+    if ((panGesture && panGesture.active) || pinchGesture) {
+      suppressTapUntil = Date.now() + 250;
+    }
+    panGesture = null;
     pinchGesture = null;
+    return;
   }
+
+  if (e.touches.length === 1 && pinchGesture) {
+    pinchGesture = null;
+    const touch = e.touches[0];
+    panGesture = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      startOffsetX: modalOffsetX,
+      startOffsetY: modalOffsetY,
+      active: false,
+    };
+    suppressTapUntil = Date.now() + 250;
+  }
+}
+
+function handleMousePanStart(e) {
+  if (!state || els.fieldModal.classList.contains("hidden")) return;
+  if (e.button !== 0) return;
+  if (!e.target.closest(".board")) return;
+
+  mousePan = {
+    startX: e.clientX,
+    startY: e.clientY,
+    startOffsetX: modalOffsetX,
+    startOffsetY: modalOffsetY,
+    active: false,
+  };
+}
+
+function handleMousePanMove(e) {
+  if (!mousePan || !state) return;
+
+  const dx = e.clientX - mousePan.startX;
+  const dy = e.clientY - mousePan.startY;
+
+  if (!mousePan.active && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+    mousePan.active = true;
+    suppressTapUntil = Date.now() + 250;
+  }
+
+  if (mousePan.active) {
+    modalOffsetX = mousePan.startOffsetX + dx;
+    modalOffsetY = mousePan.startOffsetY + dy;
+    clampModalTransform();
+    applyModalTransform();
+  }
+}
+
+function handleMousePanEnd() {
+  if (mousePan?.active) {
+    suppressTapUntil = Date.now() + 250;
+  }
+  mousePan = null;
 }
 
 function touchesDistance(a, b) {
   return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 }
 
-function zoomKeepingViewport(nextZoom, anchor = null) {
+function zoomKeepingViewport(nextScale, anchor = null) {
   if (!state) return;
 
-  const scroll = els.modalBoardScroll;
-  const rect = scroll.getBoundingClientRect();
-  const oldZoom = boardZoom;
-
-  if (Math.abs(nextZoom - oldZoom) < 0.001) return;
-
+  const rect = els.modalBoardScroll.getBoundingClientRect();
   const anchorX = anchor?.x ?? rect.width / 2;
   const anchorY = anchor?.y ?? rect.height / 2;
-  const contentX = scroll.scrollLeft + anchorX;
-  const contentY = scroll.scrollTop + anchorY;
-  const ratio = nextZoom / oldZoom;
 
-  boardZoom = nextZoom;
-  renderBoards();
+  const boardX = (anchorX - modalOffsetX) / modalScale;
+  const boardY = (anchorY - modalOffsetY) / modalScale;
 
-  requestAnimationFrame(() => {
-    scroll.scrollLeft = Math.max(0, contentX * ratio - anchorX);
-    scroll.scrollTop = Math.max(0, contentY * ratio - anchorY);
-  });
+  modalScale = nextScale;
+  modalOffsetX = anchorX - boardX * modalScale;
+  modalOffsetY = anchorY - boardY * modalScale;
+
+  clampModalTransform();
+  applyModalTransform();
+}
+
+function clampModalTransform() {
+  if (!els.modalStage || !state) return;
+
+  const viewportW = els.modalBoardScroll.clientWidth;
+  const viewportH = els.modalBoardScroll.clientHeight;
+  const contentW = els.modalStage.offsetWidth * modalScale;
+  const contentH = els.modalStage.offsetHeight * modalScale;
+
+  if (contentW <= viewportW) {
+    modalOffsetX = (viewportW - contentW) / 2;
+  } else {
+    modalOffsetX = clamp(modalOffsetX, viewportW - contentW, 0);
+  }
+
+  if (contentH <= viewportH) {
+    modalOffsetY = (viewportH - contentH) / 2;
+  } else {
+    modalOffsetY = clamp(modalOffsetY, viewportH - contentH, 0);
+  }
+}
+
+function applyModalTransform() {
+  if (!els.modalStage) return;
+  els.modalStage.style.transform = `translate3d(${modalOffsetX}px, ${modalOffsetY}px, 0) scale(${modalScale})`;
 }
 
 function renderOverlay() {
@@ -834,7 +978,12 @@ function renderOverlay() {
 }
 
 function updateTopCounters() {
-  const minesLeft = state?.flagsLeft ?? getMines();
+  const previewRows = getInputPreviewValue(els.rowsInput, 9);
+  const previewCols = getInputPreviewValue(els.colsInput, 9);
+  const previewMaxMines = Math.max(1, previewRows * previewCols - 1);
+  const previewMines = clamp(getInputPreviewValue(els.minesInput, 10), 1, previewMaxMines);
+
+  const minesLeft = state?.flagsLeft ?? previewMines;
   const elapsed = state?.over ? frozenElapsedSec : computeElapsedSec(state);
   const timeText = formatDuration(elapsed);
 
@@ -872,7 +1021,9 @@ function pad2(v) {
 function openFieldModal() {
   els.fieldModal.classList.remove("hidden");
   document.body.classList.add("modal-open");
-  if (state) fitZoom();
+  requestAnimationFrame(() => {
+    if (state) fitZoom();
+  });
 }
 
 function closeFieldModal() {
@@ -881,23 +1032,19 @@ function closeFieldModal() {
 }
 
 function fitZoom() {
-  if (!state) return;
+  if (!state || !els.modalStage) return;
 
-  const cols = state.cols || 9;
-  const rows = state.rows || 9;
-  const base = getModalBaseCellSize(cols);
-  const gap = base <= 14 ? 2 : base <= 20 ? 3 : 4;
+  const viewportW = Math.max(240, els.modalBoardScroll.clientWidth);
+  const viewportH = Math.max(240, els.modalBoardScroll.clientHeight);
+  const contentW = Math.max(1, els.modalStage.offsetWidth);
+  const contentH = Math.max(1, els.modalStage.offsetHeight);
 
-  const availW = Math.max(240, window.innerWidth - 90);
-  const availH = Math.max(240, window.innerHeight - 260);
+  modalScale = clamp(Math.min(viewportW / contentW, viewportH / contentH), ZOOM_MIN, ZOOM_MAX);
+  modalOffsetX = 0;
+  modalOffsetY = 0;
 
-  const totalW = cols * base + Math.max(0, cols - 1) * gap;
-  const totalH = rows * base + Math.max(0, rows - 1) * gap;
-
-  const zoomW = availW / totalW;
-  const zoomH = availH / totalH;
-
-  zoomKeepingViewport(clamp(Math.min(zoomW, zoomH), ZOOM_MIN, ZOOM_MAX));
+  clampModalTransform();
+  applyModalTransform();
 }
 
 function defaultZoomForState(gameState) {
