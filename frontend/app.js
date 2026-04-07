@@ -240,9 +240,11 @@ function bindUI() {
     cleanFullscreenMode = !cleanFullscreenMode;
     applyFullscreenMode();
     requestAnimationFrame(() => {
-      if (state) fitZoom();
+      clampToBoundsImmediate();
+      applyModalTransform();
     });
   });
+
 
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
 
@@ -1137,10 +1139,13 @@ function applyFullscreenMode() {
   const card = document.querySelector(".field-modal-card");
   if (!card) return;
 
+  els.fieldModal.classList.toggle("fullscreen-clean", cleanFullscreenMode);
   card.classList.toggle("fullscreen-clean", cleanFullscreenMode);
+
   els.closeFieldBtn.textContent = cleanFullscreenMode ? "Вернуться" : "Закрыть";
   els.fullscreenFieldBtn.textContent = cleanFullscreenMode ? "↙" : "⤢";
 }
+
 
 function applyPerformanceMode() {
   const cellsCount = (state?.rows || 0) * (state?.cols || 0);
