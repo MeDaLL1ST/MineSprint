@@ -673,12 +673,13 @@ h1 {
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: 0.12s ease;
+  transition: transform 0.08s ease;
   overflow: hidden;
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,0.08),
-    0 4px 10px rgba(0,0,0,0.18);
+    0 2px 6px rgba(0,0,0,0.14);
   touch-action: manipulation;
+  contain: layout paint style;
 }
 
 .cell:hover {
@@ -797,6 +798,38 @@ h1 {
   overflow: hidden;
 }
 
+.field-modal-card.fullscreen-clean {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  border: 0;
+  padding: 8px;
+  background: rgba(8, 12, 24, 0.995);
+}
+
+.field-modal-card.fullscreen-clean .modal-counters,
+.field-modal-card.fullscreen-clean .zoom-controls,
+.field-modal-card.fullscreen-clean .modal-hint,
+.field-modal-card.fullscreen-clean .modal-toolbar,
+.field-modal-card.fullscreen-clean .modal-restart-btn {
+  display: none !important;
+}
+
+.field-modal-card.fullscreen-clean .field-modal-header {
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.field-modal-card.fullscreen-clean .modal-board-scroll {
+  border-radius: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
 .field-modal-header {
   display: flex;
   align-items: center;
@@ -844,6 +877,24 @@ h1 {
 
 .modal-board-scroll.dragging {
   cursor: grabbing;
+}
+
+.modal-board-scroll.performance-mode .cell {
+  box-shadow: none;
+  transition: none;
+}
+
+.modal-board-scroll.performance-mode .cell:hover {
+  transform: none;
+}
+
+.modal-board-scroll.performance-mode .cell.mine {
+  box-shadow: none;
+}
+
+.modal-board-scroll.performance-mode .cell.hovered-by-other:not(.open) {
+  outline-width: 1px;
+  box-shadow: none;
 }
 
 .modal-stage {

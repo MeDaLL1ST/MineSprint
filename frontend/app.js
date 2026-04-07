@@ -52,7 +52,9 @@ const els = {
   zoomInBtn: $("#zoomInBtn"),
   zoomOutBtn: $("#zoomOutBtn"),
   fitZoomBtn: $("#fitZoomBtn"),
+  fullscreenFieldBtn: $("#fullscreenFieldBtn"),
   modalRestartBtn: $("#modalRestartBtn"),
+
 
   statusText: $("#statusText"),
   badge: $("#badge"),
@@ -92,6 +94,7 @@ let frozenElapsedSec = 0;
 let modalScale = 1;
 let modalOffsetX = 0;
 let modalOffsetY = 0;
+let cleanFullscreenMode = false;
 let panGesture = null;
 let pinchGesture = null;
 let mousePan = null;
@@ -232,6 +235,15 @@ function bindUI() {
   });
 
   els.fitZoomBtn.addEventListener("click", fitZoom);
+
+  els.fullscreenFieldBtn.addEventListener("click", () => {
+    cleanFullscreenMode = !cleanFullscreenMode;
+    applyFullscreenMode();
+    requestAnimationFrame(() => {
+      if (state) fitZoom();
+    });
+  });
+
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
 
   els.boardPreview.addEventListener("mouseleave", clearHoverCell);
@@ -593,6 +605,7 @@ function renderBoards() {
   requestAnimationFrame(() => {
     clampToBoundsImmediate();
     applyModalTransform();
+    applyPerformanceMode();
     applyHoverDecorations();
   });
 }
@@ -991,6 +1004,7 @@ function zoomKeepingViewport(nextScale, anchor = null) {
   const rawY = anchorY - boardY * modalScale;
 
   setOffsetsWithElastic(rawX, rawY);
+  applyPerformanceMode();
   springBackToBounds();
 }
 
@@ -1104,8 +1118,10 @@ function pad2(v) {
 function openFieldModal() {
   els.fieldModal.classList.remove("hidden");
   document.body.classList.add("modal-open");
+  applyFullscreenMode();
   requestAnimationFrame(() => {
     if (state) fitZoom();
+    applyPerformanceMode();
   });
 }
 
@@ -1113,7 +1129,25 @@ function closeFieldModal() {
   els.fieldModal.classList.add("hidden");
   document.body.classList.remove("modal-open");
   setDragging(false);
+  cleanFullscreenMode = false;
+  applyFullscreenMode();
 }
+
+function applyFullscreenMode() {
+  const card = document.querySelector(".field-modal-card");
+  if (!card) return;
+
+  card.classList.toggle("fullscreen-clean", cleanFullscreenMode);
+  els.closeFieldBtn.textContent = cleanFullscreenMode ? "Вернуться" : "Закрыть";
+  els.fullscreenFieldBtn.textContent = cleanFullscreenMode ? "↙" : "⤢";
+}
+
+function applyPerformanceMode() {
+  const cellsCount = (state?.rows || 0) * (state?.cols || 0);
+  const heavy = cellsCount >= 256 || modalScale > 1.35;
+  els.modalBoardScroll.classList.toggle("performance-mode", heavy);
+}
+
 
 function fitZoom() {
   if (!state || !els.modalStage) return;
