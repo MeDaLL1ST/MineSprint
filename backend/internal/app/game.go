@@ -88,16 +88,20 @@ func (s *Server) joinRoom(c *Client, code string) {
 
 	if current := s.currentGameLocked(c.ID); current != nil {
 		if current.RoomCode == code {
+			current.mu.Lock()
 			s.sendStateLocked(c, current)
+			current.mu.Unlock()
 			return
 		}
 		s.leaveCurrentGameLocked(c.ID)
 	}
 
 	game := room.Game
+	game.mu.Lock()
 
 	if !contains(game.Players, c.ID) {
 		if len(game.Players) >= 8 {
+			game.mu.Unlock()
 			s.sendError(c, "Комната заполнена")
 			return
 		}
@@ -120,13 +124,15 @@ func (s *Server) joinRoom(c *Client, code string) {
 	room.EmptySince = nil
 	game.LastAction = time.Now()
 
+	stateMsgs := s.buildBroadcastMsgs(game)
+	game.mu.Unlock()
+
 	s.send(c, map[string]any{
 		"type":    "room_joined",
 		"code":    code,
 		"message": "Вы вошли в комнату " + code,
 	})
-
-	s.pushGameLocked(game)
+	s.sendBroadcastLocked(stateMsgs)
 }
 
 func (s *Server) leaveRoom(c *Client) {
@@ -161,16 +167,22 @@ func (s *Server) restartRoom(c *Client) {
 		return
 	}
 
-	names := map[string]string{}
+	// Read old game's immutable-after-start fields under game.mu.
+	game.mu.Lock()
+	names := make(map[string]string, len(game.Players))
 	for _, pid := range game.Players {
 		names[pid] = game.Names[pid]
 	}
+	players := append([]string{}, game.Players...)
+	mode, rows, cols, mines := game.Mode, game.Rows, game.Cols, game.Mines
+	roomCode, ownerID, oldID := game.RoomCode, game.OwnerID, game.ID
+	game.mu.Unlock()
 
-	next := newGame(game.Mode, game.Rows, game.Cols, game.Mines, append([]string{}, game.Players...), names)
-	next.RoomCode = game.RoomCode
-	next.OwnerID = game.OwnerID
+	next := newGame(mode, rows, cols, mines, players, names)
+	next.RoomCode = roomCode
+	next.OwnerID = ownerID
 
-	delete(s.games, game.ID)
+	delete(s.games, oldID)
 	s.games[next.ID] = next
 	room.Game = next
 	room.EmptySince = nil
@@ -179,26 +191,23 @@ func (s *Server) restartRoom(c *Client) {
 		s.playerGame[pid] = next.ID
 	}
 
+	// next is a fresh game; no concurrent access possible yet.
 	s.pushGameLocked(next)
 }
 
 func (s *Server) revealCell(c *Client, idx int) {
-	var matchID string
-	var openedCount int
-	var action string
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	s.mu.RLock()
 	game := s.currentGameLocked(c.ID)
 	if game == nil {
+		s.mu.RUnlock()
 		s.sendError(c, "Нет активной игры")
 		return
 	}
-	if game.Over {
-		return
-	}
-	if idx < 0 || idx >= len(game.Board) {
+	game.mu.Lock()
+	s.mu.RUnlock()
+
+	if game.Over || idx < 0 || idx >= len(game.Board) {
+		game.mu.Unlock()
 		return
 	}
 
@@ -211,10 +220,11 @@ func (s *Server) revealCell(c *Client, idx int) {
 
 	cell := &game.Board[idx]
 	if cell.Opened || cell.Flagged {
+		game.mu.Unlock()
 		return
 	}
 
-	matchID = game.ID
+	matchID := game.ID
 
 	if cell.Mine {
 		cell.Opened = true
@@ -222,34 +232,32 @@ func (s *Server) revealCell(c *Client, idx int) {
 		game.Over = true
 		game.EndedAt = time.Now()
 		game.EndReason = "mine"
-
 		switch game.Mode {
 		case "versus":
 			game.WinnerID = determineVersusWinner(game, c.ID)
 		default:
 			game.WinnerID = ""
 		}
-
-		action = "explode"
 		s.persistLaterLocked(game)
-		s.pushGameLocked(game)
-		go s.recordMove(matchID, c.ID, action, 0)
+		msgs := s.buildBroadcastMsgs(game)
+		game.mu.Unlock()
+		s.sendBroadcast(msgs)
+		go s.recordMove(matchID, c.ID, "explode", 0)
 		return
 	}
 
-	openedCount = floodOpen(game, idx, c.ID)
+	openedCount := floodOpen(game, idx, c.ID)
 	if openedCount <= 0 {
+		game.mu.Unlock()
 		return
 	}
 
 	game.Scores[c.ID] += openedCount
-	action = "reveal"
 
 	if allSafeOpened(game) {
 		game.Over = true
 		game.EndedAt = time.Now()
 		game.EndReason = "clear"
-
 		switch game.Mode {
 		case "solo":
 			game.WinnerID = c.ID
@@ -258,59 +266,71 @@ func (s *Server) revealCell(c *Client, idx int) {
 		case "versus":
 			game.WinnerID = determineVersusWinner(game, "")
 		}
-
 		s.persistLaterLocked(game)
 	}
 
-	s.pushGameLocked(game)
-	go s.recordMove(matchID, c.ID, action, openedCount)
+	msgs := s.buildBroadcastMsgs(game)
+	game.mu.Unlock()
+	s.sendBroadcast(msgs)
+	go s.recordMove(matchID, c.ID, "reveal", openedCount)
 }
 
 func (s *Server) toggleFlag(c *Client, idx int) {
-	var matchID string
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	s.mu.RLock()
 	game := s.currentGameLocked(c.ID)
-	if game == nil || game.Over {
+	if game == nil {
+		s.mu.RUnlock()
 		return
 	}
-	if idx < 0 || idx >= len(game.Board) {
+	game.mu.Lock()
+	s.mu.RUnlock()
+
+	if game.Over || idx < 0 || idx >= len(game.Board) {
+		game.mu.Unlock()
 		return
 	}
 
 	game.LastAction = time.Now()
-	matchID = game.ID
+	matchID := game.ID
 
 	cell := &game.Board[idx]
 	if cell.Opened {
+		game.mu.Unlock()
 		return
 	}
 
-	flagged := countFlagged(game)
+	var action string
 	if cell.Flagged {
 		cell.Flagged = false
-		s.pushGameLocked(game)
-		go s.recordMove(matchID, c.ID, "unflag", 0)
-		return
-	}
-	if flagged >= game.Mines {
-		s.sendError(c, "Лимит флагов достигнут")
-		return
+		action = "unflag"
+	} else {
+		if countFlagged(game) >= game.Mines {
+			game.mu.Unlock()
+			s.sendError(c, "Лимит флагов достигнут")
+			return
+		}
+		cell.Flagged = true
+		action = "flag"
 	}
 
-	cell.Flagged = true
-	s.pushGameLocked(game)
-	go s.recordMove(matchID, c.ID, "flag", 0)
+	msgs := s.buildBroadcastMsgs(game)
+	game.mu.Unlock()
+	s.sendBroadcast(msgs)
+	go s.recordMove(matchID, c.ID, action, 0)
 }
 
 func (s *Server) setHover(c *Client, idx int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	s.mu.RLock()
 	game := s.currentGameLocked(c.ID)
-	if game == nil || game.Mode == "solo" {
+	if game == nil {
+		s.mu.RUnlock()
+		return
+	}
+	game.mu.Lock()
+	s.mu.RUnlock()
+
+	if game.Mode == "solo" {
+		game.mu.Unlock()
 		return
 	}
 	if game.Hovers == nil {
@@ -320,17 +340,24 @@ func (s *Server) setHover(c *Client, idx int) {
 	if idx < 0 || idx >= len(game.Board) {
 		if _, ok := game.Hovers[c.ID]; ok {
 			delete(game.Hovers, c.ID)
-			s.pushHoverLocked(game, c.ID, -1, false)
+			msgs := s.buildHoverMsgs(game, c.ID, -1, false)
+			game.mu.Unlock()
+			s.sendBroadcast(msgs)
+			return
 		}
+		game.mu.Unlock()
 		return
 	}
 
 	if prev, ok := game.Hovers[c.ID]; ok && prev == idx {
+		game.mu.Unlock()
 		return
 	}
 
 	game.Hovers[c.ID] = idx
-	s.pushHoverLocked(game, c.ID, idx, true)
+	msgs := s.buildHoverMsgs(game, c.ID, idx, true)
+	game.mu.Unlock()
+	s.sendBroadcast(msgs)
 }
 
 func (s *Server) pushHoverLocked(g *Game, playerID string, cell int, active bool) {
@@ -352,10 +379,13 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		return
 	}
 
-	delete(s.playerGame, playerID)
+	game.mu.Lock()
+
 	game.LastAction = time.Now()
 
 	if game.Mode == "solo" {
+		game.mu.Unlock()
+		delete(s.playerGame, playerID)
 		delete(s.games, game.ID)
 		return
 	}
@@ -365,21 +395,28 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 	if game.Hovers != nil {
 		delete(game.Hovers, playerID)
 	}
-
 	game.Players = removePlayer(game.Players, playerID)
 	delete(game.Names, playerID)
 	delete(game.Scores, playerID)
 
 	if room == nil {
 		if len(game.Players) == 0 {
+			game.mu.Unlock()
+			delete(s.playerGame, playerID)
 			delete(s.games, game.ID)
 			return
 		}
 		if game.OwnerID == playerID || !contains(game.Players, game.OwnerID) {
 			game.OwnerID = game.Players[0]
 		}
-		s.pushHoverLocked(game, playerID, -1, false)
-		s.pushGameLocked(game)
+		// Build messages while game.mu is held, then unlock and broadcast.
+		hoverMsgs := s.buildHoverMsgs(game, playerID, -1, false)
+		stateMsgs := s.buildBroadcastMsgs(game)
+		game.mu.Unlock()
+		delete(s.playerGame, playerID)
+		// s.mu write-lock is held by caller; send directly via s.clients.
+		s.sendBroadcastLocked(hoverMsgs)
+		s.sendBroadcastLocked(stateMsgs)
 		return
 	}
 
@@ -388,18 +425,22 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		room.OwnerID = ""
 		now := time.Now()
 		room.EmptySince = &now
+		game.mu.Unlock()
+		delete(s.playerGame, playerID)
 		return
 	}
 
 	room.EmptySince = nil
-
 	if game.OwnerID == playerID || !contains(game.Players, game.OwnerID) {
 		game.OwnerID = game.Players[0]
 		room.OwnerID = game.OwnerID
 	}
-
-	s.pushHoverLocked(game, playerID, -1, false)
-	s.pushGameLocked(game)
+	hoverMsgs := s.buildHoverMsgs(game, playerID, -1, false)
+	stateMsgs := s.buildBroadcastMsgs(game)
+	game.mu.Unlock()
+	delete(s.playerGame, playerID)
+	s.sendBroadcastLocked(hoverMsgs)
+	s.sendBroadcastLocked(stateMsgs)
 }
 
 func (s *Server) buildStateLocked(g *Game, playerID string) State {

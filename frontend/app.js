@@ -264,6 +264,8 @@ function bindUI() {
   window.addEventListener("mousemove", handleMousePanMove);
   window.addEventListener("mouseup", handleMousePanEnd);
 
+  els.modalBoardScroll.addEventListener("wheel", handleWheelZoom, { passive: false });
+
   els.modalBoardScroll.addEventListener("contextmenu", (e) => e.preventDefault());
   els.boardModal.addEventListener("contextmenu", (e) => e.preventDefault());
   els.boardPreview.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -938,6 +940,27 @@ function handleMousePanEnd() {
   mousePan = null;
   setDragging(false);
   springBackToBounds();
+}
+
+function handleWheelZoom(e) {
+  if (!state || els.fieldModal.classList.contains("hidden")) return;
+
+  // Trackpad pinch on desktop fires wheel events with ctrlKey = true
+  if (!e.ctrlKey) return;
+
+  e.preventDefault();
+  cancelSpring();
+
+  const rect = els.modalBoardScroll.getBoundingClientRect();
+  const anchorX = e.clientX - rect.left;
+  const anchorY = e.clientY - rect.top;
+
+  let delta = e.deltaY;
+  if (e.deltaMode === 1 /* DOM_DELTA_LINE */) delta *= 16;
+  if (e.deltaMode === 2 /* DOM_DELTA_PAGE */) delta *= 100;
+
+  const nextScale = clamp(modalScale * (1 - delta * 0.01), ZOOM_MIN, ZOOM_MAX);
+  zoomKeepingViewport(nextScale, { x: anchorX, y: anchorY });
 }
 
 function touchesDistance(a, b) {

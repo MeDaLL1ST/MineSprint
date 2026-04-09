@@ -13,7 +13,7 @@ type Server struct {
 	db       *pgxpool.Pool
 	upgrader websocket.Upgrader
 
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	clients    map[string]*Client
 	games      map[string]*Game
 	playerGame map[string]string

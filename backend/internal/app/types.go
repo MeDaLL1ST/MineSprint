@@ -1,6 +1,7 @@
 package app
 
 import (
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -23,6 +24,7 @@ type Cell struct {
 }
 
 type Game struct {
+	mu         sync.Mutex // protects all mutable Game fields
 	ID         string
 	Mode       string
 	Rows       int

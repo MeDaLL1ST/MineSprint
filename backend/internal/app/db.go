@@ -170,24 +170,41 @@ func (s *Server) persistLaterLocked(g *Game) {
 }
 
 func cloneGame(g *Game) *Game {
-	out := *g
-	out.Players = append([]string{}, g.Players...)
-	out.Names = map[string]string{}
-	out.Scores = map[string]int{}
-	out.Hovers = map[string]int{}
-	out.Board = append([]Cell{}, g.Board...)
-
+	// Construct field-by-field to avoid copying the sync.Mutex inside Game.
+	names := make(map[string]string, len(g.Names))
 	for k, v := range g.Names {
-		out.Names[k] = v
+		names[k] = v
 	}
+	scores := make(map[string]int, len(g.Scores))
 	for k, v := range g.Scores {
-		out.Scores[k] = v
+		scores[k] = v
 	}
+	hovers := make(map[string]int, len(g.Hovers))
 	for k, v := range g.Hovers {
-		out.Hovers[k] = v
+		hovers[k] = v
 	}
-
-	return &out
+	return &Game{
+		ID:         g.ID,
+		Mode:       g.Mode,
+		Rows:       g.Rows,
+		Cols:       g.Cols,
+		Mines:      g.Mines,
+		Board:      append([]Cell{}, g.Board...),
+		Generated:  g.Generated,
+		Players:    append([]string{}, g.Players...),
+		Names:      names,
+		Scores:     scores,
+		Hovers:     hovers,
+		Over:       g.Over,
+		WinnerID:   g.WinnerID,
+		EndReason:  g.EndReason,
+		StartedAt:  g.StartedAt,
+		EndedAt:    g.EndedAt,
+		Persisted:  g.Persisted,
+		RoomCode:   g.RoomCode,
+		OwnerID:    g.OwnerID,
+		LastAction: g.LastAction,
+	}
 }
 
 func (s *Server) persistMatch(g *Game) {

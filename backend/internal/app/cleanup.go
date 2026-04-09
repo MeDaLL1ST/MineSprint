@@ -39,8 +39,12 @@ func (s *Server) cleanupExpired() {
 			playerID = game.Players[0]
 		}
 
+		game.mu.Lock()
+		lastAction := game.LastAction
+		game.mu.Unlock()
+
 		_, online := s.clients[playerID]
-		if !online && now.Sub(game.LastAction) >= s.cfg.RoomTTL {
+		if !online && now.Sub(lastAction) >= s.cfg.RoomTTL {
 			delete(s.games, gid)
 			delete(s.playerGame, playerID)
 		}

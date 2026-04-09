@@ -102,11 +102,11 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	liveUsers := len(s.clients)
 	liveRooms := len(s.rooms)
 	liveGames := len(s.games)
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{

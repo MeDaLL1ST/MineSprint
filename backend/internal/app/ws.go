@@ -66,18 +66,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) registerClient(c *Client) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if prev, ok := s.clients[c.ID]; ok && prev != c {
 		close(prev.Send)
 		_ = prev.Conn.Close()
 	}
-
 	s.clients[c.ID] = c
 	go s.upsertUser(c.ID, c.Name, c.Username)
+	g := s.currentGameLocked(c.ID)
+	s.mu.Unlock()
 
-	if g := s.currentGameLocked(c.ID); g != nil {
+	if g != nil {
+		g.mu.Lock()
 		s.sendStateLocked(c, g)
+		g.mu.Unlock()
 	}
 }
 
@@ -132,6 +133,75 @@ func (s *Server) currentGameLocked(playerID string) *Game {
 		return nil
 	}
 	return s.games[gid]
+}
+
+// playerMsg is a pre-serialised message destined for one player.
+type playerMsg struct {
+	pid string
+	msg []byte
+}
+
+// buildBroadcastMsgs builds per-player state messages from g.
+// Caller must hold g.mu (or exclusive s.mu so no hot-path can mutate g).
+func (s *Server) buildBroadcastMsgs(g *Game) []playerMsg {
+	msgs := make([]playerMsg, 0, len(g.Players))
+	for _, pid := range g.Players {
+		data, err := json.Marshal(map[string]any{
+			"type":    "state",
+			"payload": s.buildStateLocked(g, pid),
+		})
+		if err != nil {
+			continue
+		}
+		msgs = append(msgs, playerMsg{pid: pid, msg: data})
+	}
+	return msgs
+}
+
+// buildHoverMsgs builds hover-notification messages for all players in g.
+// Caller must hold g.mu.
+func (s *Server) buildHoverMsgs(g *Game, playerID string, cell int, active bool) []playerMsg {
+	data, _ := json.Marshal(map[string]any{
+		"type":     "hover",
+		"playerId": playerID,
+		"cell":     cell,
+		"active":   active,
+	})
+	msgs := make([]playerMsg, 0, len(g.Players))
+	for _, pid := range g.Players {
+		msgs = append(msgs, playerMsg{pid: pid, msg: data})
+	}
+	return msgs
+}
+
+// sendBroadcast delivers pre-built messages to their recipients.
+// Safe to call with no lock held; acquires s.mu.RLock internally.
+// Use for hot-path callers that hold no server lock.
+func (s *Server) sendBroadcast(msgs []playerMsg) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, m := range msgs {
+		if c, ok := s.clients[m.pid]; ok {
+			select {
+			case c.Send <- m.msg:
+			default:
+			}
+		}
+	}
+}
+
+// sendBroadcastLocked delivers pre-built messages to their recipients.
+// Caller must already hold s.mu (any form); does not acquire s.mu.
+// Use for cold-path callers that hold s.mu.Lock.
+func (s *Server) sendBroadcastLocked(msgs []playerMsg) {
+	for _, m := range msgs {
+		if c, ok := s.clients[m.pid]; ok {
+			select {
+			case c.Send <- m.msg:
+			default:
+			}
+		}
+	}
 }
 
 func (s *Server) send(c *Client, payload any) {
