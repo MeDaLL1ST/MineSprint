@@ -53,6 +53,7 @@ const els = {
   zoomOutBtn: $("#zoomOutBtn"),
   fitZoomBtn: $("#fitZoomBtn"),
   fullscreenFieldBtn: $("#fullscreenFieldBtn"),
+  reviveBtn: $("#reviveBtn"),
   modalRestartBtn: $("#modalRestartBtn"),
 
 
@@ -95,6 +96,7 @@ let modalScale = 1;
 let modalOffsetX = 0;
 let modalOffsetY = 0;
 let cleanFullscreenMode = false;
+let revivePending = false;
 let panGesture = null;
 let pinchGesture = null;
 let mousePan = null;
@@ -222,6 +224,13 @@ function bindUI() {
   els.restartRoomBtn.addEventListener("click", restartCurrentGame);
   els.overlayActionBtn.addEventListener("click", restartCurrentGame);
   els.modalRestartBtn.addEventListener("click", restartCurrentGame);
+
+  els.reviveBtn.addEventListener("click", () => {
+    if (!state?.canRevive || revivePending) return;
+    revivePending = true;
+    els.reviveBtn.disabled = true;
+    send({ type: "revive_request" });
+  });
 
   els.openFieldBtn.addEventListener("click", openFieldModal);
   els.closeFieldBtn.addEventListener("click", closeFieldModal);
@@ -463,7 +472,26 @@ function handleMessage(msg) {
     return;
   }
 
+  if (msg.type === "invoice_link") {
+    if (!msg.url) {
+      revivePending = false;
+      if (els.reviveBtn) els.reviveBtn.disabled = false;
+      toast("Ошибка создания платежа");
+      return;
+    }
+    tg?.openInvoice?.(msg.url, (status) => {
+      revivePending = false;
+      if (status !== "paid") {
+        if (els.reviveBtn) els.reviveBtn.disabled = false;
+      }
+      // If "paid" — wait for server to broadcast the revived state
+    });
+    return;
+  }
+
   if (msg.type === "error") {
+    revivePending = false;
+    if (els.reviveBtn) els.reviveBtn.disabled = false;
     toast(msg.message || "Ошибка");
     setBadge("ERROR", "danger");
     setStatus(msg.message || "Ошибка");
@@ -1088,6 +1116,8 @@ function renderOverlay() {
   if (!over) {
     els.overlay.classList.add("hidden");
     els.modalRestartBtn.classList.add("hidden");
+    els.reviveBtn.classList.add("hidden");
+    revivePending = false;
     return;
   }
 
@@ -1097,6 +1127,13 @@ function renderOverlay() {
 
   els.modalRestartBtn.classList.remove("hidden");
   els.modalRestartBtn.textContent = state.online ? "Рестарт комнаты" : "Сыграть ещё";
+
+  if (state.canRevive) {
+    els.reviveBtn.classList.remove("hidden");
+    els.reviveBtn.disabled = revivePending;
+  } else {
+    els.reviveBtn.classList.add("hidden");
+  }
 }
 
 function updateTopCounters() {

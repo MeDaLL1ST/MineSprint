@@ -818,7 +818,8 @@ h1 {
 .field-modal-card.fullscreen-clean .zoom-controls,
 .field-modal-card.fullscreen-clean .modal-hint,
 .field-modal-card.fullscreen-clean .modal-toolbar,
-.field-modal-card.fullscreen-clean .modal-restart-btn {
+.field-modal-card.fullscreen-clean .modal-restart-btn,
+.field-modal-card.fullscreen-clean .revive-btn {
   display: none !important;
 }
 
@@ -880,6 +881,35 @@ h1 {
 
 .modal-restart-btn {
   padding: 10px 14px;
+}
+
+.revive-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255, 215, 0, 0.45);
+  background: rgba(255, 215, 0, 0.12);
+  color: #ffd700;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+
+.revive-btn:hover {
+  background: rgba(255, 215, 0, 0.22);
+}
+
+.revive-btn:active {
+  transform: scale(0.96);
+}
+
+.revive-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .modal-hint {

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -51,7 +55,31 @@ func main() {
 	log.Printf("bot started as @%s", bot.Self.UserName)
 
 	for update := range updates {
+		// Handle Stars pre-checkout: approve immediately
+		if update.PreCheckoutQuery != nil {
+			pq := update.PreCheckoutQuery
+			if strings.HasPrefix(pq.InvoicePayload, "revive:") {
+				_, _ = bot.Request(tgbotapi.PreCheckoutConfig{
+					PreCheckoutQueryID: pq.ID,
+					OK:                 true,
+				})
+			}
+			continue
+		}
+
 		if update.Message == nil {
+			continue
+		}
+
+		// Handle successful Stars payment
+		if update.Message.SuccessfulPayment != nil {
+			sp := update.Message.SuccessfulPayment
+			if strings.HasPrefix(sp.InvoicePayload, "revive:") {
+				playerID := fmt.Sprintf("%d", update.Message.From.ID)
+				if err := notifyRevive(cfg, playerID); err != nil {
+					log.Printf("revive notify error for player %s: %v", playerID, err)
+				}
+			}
 			continue
 		}
 
@@ -69,6 +97,26 @@ func main() {
 			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "")
 		}
 	}
+}
+
+func notifyRevive(cfg app.Config, playerID string) error {
+	body, _ := json.Marshal(map[string]string{
+		"secret":   cfg.InternalSecret,
+		"playerId": playerID,
+	})
+	resp, err := http.Post(
+		cfg.InternalServerURL+"/api/internal/revive",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func parseRoomCode(arg string) string {

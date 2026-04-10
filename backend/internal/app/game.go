@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -275,6 +276,52 @@ func (s *Server) revealCell(c *Client, idx int) {
 	go s.recordMove(matchID, c.ID, "reveal", openedCount)
 }
 
+func (s *Server) revivePlayer(playerID string) error {
+	s.mu.RLock()
+	game := s.currentGameLocked(playerID)
+	if game == nil {
+		s.mu.RUnlock()
+		return errors.New("нет активной игры")
+	}
+	game.mu.Lock()
+	s.mu.RUnlock()
+
+	if !game.Over || game.EndReason != "mine" {
+		game.mu.Unlock()
+		return errors.New("игра не завершилась взрывом")
+	}
+	if game.RevivedPlayers == nil {
+		game.RevivedPlayers = make(map[string]bool)
+	}
+	if game.RevivedPlayers[playerID] {
+		game.mu.Unlock()
+		return errors.New("возрождение уже использовано")
+	}
+	hitMine := false
+	for _, cell := range game.Board {
+		if cell.Mine && cell.Opened && cell.OpenedBy == playerID {
+			hitMine = true
+			break
+		}
+	}
+	if !hitMine {
+		game.mu.Unlock()
+		return errors.New("игрок не попал на мину")
+	}
+
+	game.Over = false
+	game.EndReason = ""
+	game.WinnerID = ""
+	game.EndedAt = time.Time{}
+	game.RevivedPlayers[playerID] = true
+	game.LastAction = time.Now()
+
+	msgs := s.buildBroadcastMsgs(game)
+	game.mu.Unlock()
+	s.sendBroadcast(msgs)
+	return nil
+}
+
 func (s *Server) toggleFlag(c *Client, idx int) {
 	s.mu.RLock()
 	game := s.currentGameLocked(c.ID)
@@ -499,6 +546,19 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		hovers = nil
 	}
 
+	canRevive := false
+	if g.Over && g.EndReason == "mine" {
+		alreadyRevived := g.RevivedPlayers != nil && g.RevivedPlayers[playerID]
+		if !alreadyRevived {
+			for _, cell := range g.Board {
+				if cell.Mine && cell.Opened && cell.OpenedBy == playerID {
+					canRevive = true
+					break
+				}
+			}
+		}
+	}
+
 	return State{
 		GameID:     g.ID,
 		RoomCode:   g.RoomCode,
@@ -522,10 +582,12 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 			Name:  g.Names[playerID],
 			Score: g.Scores[playerID],
 		},
-		Players: players,
-		Hovers:  hovers,
-		Status:  statusText(g, playerID),
-		Board:   board,
+		Players:   players,
+		Hovers:    hovers,
+		Status:    statusText(g, playerID),
+		Board:     board,
+		EndReason: g.EndReason,
+		CanRevive: canRevive,
 	}
 }
 

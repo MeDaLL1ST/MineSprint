@@ -14,6 +14,7 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/admin/stats", s.handleAdminStats)
 	mux.HandleFunc("/api/admin/ban", s.handleAdminBan)
 	mux.HandleFunc("/api/admin/unban", s.handleAdminUnban)
+	mux.HandleFunc("/api/internal/revive", s.handleInternalRevive)
 	mux.HandleFunc("/ws", s.handleWS)
 	return mux
 }
@@ -399,6 +400,34 @@ limit 10
 	}
 
 	return items, nil
+}
+
+func (s *Server) handleInternalRevive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Secret   string `json:"secret"`
+		PlayerID string `json:"playerId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad request"})
+		return
+	}
+
+	if req.Secret != s.cfg.InternalSecret {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+
+	if err := s.revivePlayer(req.PlayerID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

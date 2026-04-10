@@ -24,27 +24,28 @@ type Cell struct {
 }
 
 type Game struct {
-	mu         sync.Mutex // protects all mutable Game fields
-	ID         string
-	Mode       string
-	Rows       int
-	Cols       int
-	Mines      int
-	Board      []Cell
-	Generated  bool
-	Players    []string
-	Names      map[string]string
-	Scores     map[string]int
-	Hovers     map[string]int
-	Over       bool
-	WinnerID   string
-	EndReason  string
-	StartedAt  time.Time
-	EndedAt    time.Time
-	Persisted  bool
-	RoomCode   string
-	OwnerID    string
-	LastAction time.Time
+	mu             sync.Mutex // protects all mutable Game fields
+	ID             string
+	Mode           string
+	Rows           int
+	Cols           int
+	Mines          int
+	Board          []Cell
+	Generated      bool
+	Players        []string
+	Names          map[string]string
+	Scores         map[string]int
+	Hovers         map[string]int
+	Over           bool
+	WinnerID       string
+	EndReason      string
+	StartedAt      time.Time
+	EndedAt        time.Time
+	Persisted      bool
+	RoomCode       string
+	OwnerID        string
+	LastAction     time.Time
+	RevivedPlayers map[string]bool
 }
 
 type Room struct {
@@ -103,6 +104,8 @@ type State struct {
 	Hovers     map[string]int `json:"hovers,omitempty"`
 	Status     string         `json:"status"`
 	Board      []ClientCell   `json:"board"`
+	EndReason  string         `json:"endReason,omitempty"`
+	CanRevive  bool           `json:"canRevive,omitempty"`
 }
 
 type LeaderboardEntry struct {

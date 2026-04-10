@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -122,6 +124,8 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.toggleFlag(c, act.Cell)
 	case "hover":
 		s.setHover(c, act.Cell)
+	case "revive_request":
+		s.handleReviveRequest(c)
 	default:
 		s.sendError(c, "Неизвестное действие")
 	}
@@ -236,4 +240,62 @@ func (s *Server) pushGameLocked(g *Game) {
 			s.sendStateLocked(c, g)
 		}
 	}
+}
+
+func (s *Server) handleReviveRequest(c *Client) {
+	s.mu.RLock()
+	game := s.currentGameLocked(c.ID)
+	if game == nil {
+		s.mu.RUnlock()
+		s.sendError(c, "Нет активной игры")
+		return
+	}
+	gameID := game.ID
+	s.mu.RUnlock()
+
+	url, err := s.createInvoiceLink(gameID, c.ID)
+	if err != nil {
+		s.sendError(c, fmt.Sprintf("Не удалось создать платёж: %v", err))
+		return
+	}
+
+	s.send(c, map[string]any{
+		"type": "invoice_link",
+		"url":  url,
+	})
+}
+
+func (s *Server) createInvoiceLink(gameID, playerID string) (string, error) {
+	payload := "revive:" + gameID + ":" + playerID
+
+	reqBody, err := json.Marshal(map[string]any{
+		"title":          "Возрождение",
+		"description":    "Потрать 2 звезды, чтобы пережить взрыв мины",
+		"payload":        payload,
+		"currency":       "XTR",
+		"prices":         []map[string]any{{"label": "Возрождение", "amount": 2}},
+		"provider_token": "",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
+	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool   `json:"ok"`
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK {
+		return "", fmt.Errorf("telegram API error")
+	}
+	return result.Result, nil
 }
