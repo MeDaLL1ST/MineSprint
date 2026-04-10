@@ -58,7 +58,9 @@ func main() {
 		// Handle Stars pre-checkout: approve immediately
 		if update.PreCheckoutQuery != nil {
 			pq := update.PreCheckoutQuery
-			if strings.HasPrefix(pq.InvoicePayload, "revive:") || strings.HasPrefix(pq.InvoicePayload, "skin:") {
+			if strings.HasPrefix(pq.InvoicePayload, "revive:") ||
+				strings.HasPrefix(pq.InvoicePayload, "skin:") ||
+				strings.HasPrefix(pq.InvoicePayload, "sub:") {
 				_, _ = bot.Request(tgbotapi.PreCheckoutConfig{
 					PreCheckoutQueryID: pq.ID,
 					OK:                 true,
@@ -83,6 +85,10 @@ func main() {
 				skinID := strings.TrimPrefix(sp.InvoicePayload, "skin:")
 				if err := notifySkinPurchase(cfg, playerID, skinID); err != nil {
 					log.Printf("skin purchase notify error for player %s skin %s: %v", playerID, skinID, err)
+				}
+			} else if strings.HasPrefix(sp.InvoicePayload, "sub:") {
+				if err := notifySubscribe(cfg, playerID); err != nil {
+					log.Printf("subscription notify error for player %s: %v", playerID, err)
 				}
 			}
 			continue
@@ -112,6 +118,26 @@ func notifySkinPurchase(cfg app.Config, playerID, skinID string) error {
 	})
 	resp, err := http.Post(
 		cfg.InternalServerURL+"/api/internal/purchase_skin",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func notifySubscribe(cfg app.Config, playerID string) error {
+	body, _ := json.Marshal(map[string]string{
+		"secret":   cfg.InternalSecret,
+		"playerId": playerID,
+	})
+	resp, err := http.Post(
+		cfg.InternalServerURL+"/api/internal/subscribe",
 		"application/json",
 		bytes.NewReader(body),
 	)

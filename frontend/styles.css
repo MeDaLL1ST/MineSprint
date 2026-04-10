@@ -169,6 +169,16 @@ h1 {
   color: #bbf7d0;
 }
 
+.pro-status {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.pro-status.pro-active {
+  color: #86efac;
+}
+
 .zoom-btn {
   min-width: 48px;
 }

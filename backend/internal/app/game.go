@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -10,6 +11,22 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// getCoopCapacity returns the max players for a coop room based on owner's subscription/privilege.
+// Returns 0 for unlimited (admin or admin-granted privilege), 10 for subscribed, 3 otherwise.
+func (s *Server) getCoopCapacity(ownerID string) int {
+	if ownerID == s.cfg.AdminTGID {
+		return 0
+	}
+	ctx := context.Background()
+	if s.isUserPrivileged(ctx, ownerID) {
+		return 0
+	}
+	if s.isUserSubscribed(ctx, ownerID) {
+		return 10
+	}
+	return 3
+}
 
 func (s *Server) startSolo(c *Client, rows, cols, mines int) {
 	if err := validateConfig(rows, cols, mines); err != nil {
@@ -98,10 +115,19 @@ func (s *Server) joinRoom(c *Client, code string) {
 	}
 
 	game := room.Game
+
+	// Compute capacity before acquiring game.mu (DB call under s.mu is acceptable here)
+	var capacity int
+	if game.Mode == "coop" {
+		capacity = s.getCoopCapacity(room.OwnerID)
+	} else {
+		capacity = 8 // versus: fixed capacity
+	}
+
 	game.mu.Lock()
 
 	if !contains(game.Players, c.ID) {
-		if len(game.Players) >= 8 {
+		if capacity > 0 && len(game.Players) >= capacity {
 			game.mu.Unlock()
 			s.sendError(c, "Комната заполнена")
 			return

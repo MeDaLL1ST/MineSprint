@@ -124,6 +124,10 @@ const els = {
   overlayActionBtn: $("#overlayActionBtn"),
   fieldModal: $("#fieldModal"),
 
+  proSection: $("#proSection"),
+  proStatus: $("#proStatus"),
+  buyProBtn: $("#buyProBtn"),
+
   adminSection: $("#adminSection"),
   openAdminBtn: $("#openAdminBtn"),
   adminModal: $("#adminModal"),
@@ -153,6 +157,10 @@ let frozenElapsedSec = 0;
 let activeSkinId = "default";
 let ownedSkins = ["default"];
 let skinPurchasePending = null; // skinId being purchased
+let hasSubscription = false;
+let isPrivileged = false;
+let isAdmin = false;
+let subPurchasePending = false;
 
 let modalScale = 1;
 let modalOffsetX = 0;
@@ -183,10 +191,6 @@ setInterval(updateTopCounters, 1000);
 
 if (isTelegramReady()) {
   connect();
-  if (user.id === ADMIN_TG_ID) {
-    els.adminSection.classList.remove("hidden");
-    loadAdminStats();
-  }
 } else {
   setBadge("TG ONLY", "danger");
   setStatus("Эту игру нужно открывать внутри Telegram Mini App");
@@ -321,6 +325,14 @@ function bindUI() {
     });
   });
 
+
+  els.buyProBtn.addEventListener("click", () => {
+    if (subPurchasePending || hasSubscription || isPrivileged || isAdmin) return;
+    subPurchasePending = true;
+    els.buyProBtn.disabled = true;
+    send({ type: "subscribe_request" });
+    impact("medium");
+  });
 
   els.openAdminBtn.addEventListener("click", openAdminModal);
   els.closeAdminBtn.addEventListener("click", closeAdminModal);
@@ -480,6 +492,38 @@ function handleMessage(msg) {
     if (Array.isArray(msg.ownedSkins)) {
       ownedSkins = msg.ownedSkins;
     }
+    hasSubscription = !!msg.hasSubscription;
+    isPrivileged = !!msg.isPrivileged;
+    isAdmin = !!msg.isAdmin;
+    renderProStatus();
+    if (isAdmin) {
+      els.adminSection.classList.remove("hidden");
+      loadAdminStats();
+    }
+    return;
+  }
+
+  if (msg.type === "subscription_activated") {
+    hasSubscription = true;
+    subPurchasePending = false;
+    renderProStatus();
+    toast("Pro подписка активирована! До 10 игроков в Co-op.");
+    impact("medium");
+    return;
+  }
+
+  if (msg.type === "privilege_granted") {
+    isPrivileged = true;
+    renderProStatus();
+    toast("Вам выдан безлимитный доступ администратором.");
+    impact("medium");
+    return;
+  }
+
+  if (msg.type === "privilege_revoked") {
+    isPrivileged = false;
+    renderProStatus();
+    toast("Безлимитный доступ отозван.");
     return;
   }
 
@@ -563,7 +607,7 @@ function handleMessage(msg) {
     render();
 
     if (state.over) {
-      if (user.id === ADMIN_TG_ID) loadAdminStats();
+      if (isAdmin) loadAdminStats();
       if (state.won) {
         tg?.HapticFeedback?.notificationOccurred?.("success");
       } else {
@@ -577,8 +621,10 @@ function handleMessage(msg) {
     if (!msg.url) {
       revivePending = false;
       skinPurchasePending = null;
+      subPurchasePending = false;
       if (els.reviveBtn) els.reviveBtn.disabled = false;
       renderSkinsGrid();
+      renderProStatus();
       toast("Ошибка создания платежа");
       return;
     }
@@ -590,6 +636,13 @@ function handleMessage(msg) {
           renderSkinsGrid();
         }
         // If "paid" — wait for server skin_purchased message
+      } else if (msg.subPending) {
+        // Subscription flow
+        subPurchasePending = false;
+        if (status !== "paid") {
+          renderProStatus(); // re-enable button
+        }
+        // If "paid" — wait for server subscription_activated message
       } else {
         // Revive flow
         revivePending = false;
@@ -698,6 +751,28 @@ function renderStatus() {
     setStatus(state.status);
   } else if (isTelegramReady()) {
     setStatus("Выбери режим и начни игру");
+  }
+}
+
+function renderProStatus() {
+  if (!els.proStatus || !els.buyProBtn) return;
+  if (isAdmin) {
+    els.proStatus.textContent = "Безлимитный доступ (администратор)";
+    els.proStatus.className = "pro-status pro-active";
+    els.buyProBtn.classList.add("hidden");
+  } else if (isPrivileged) {
+    els.proStatus.textContent = "Безлимитный доступ (выдан администратором)";
+    els.proStatus.className = "pro-status pro-active";
+    els.buyProBtn.classList.add("hidden");
+  } else if (hasSubscription) {
+    els.proStatus.textContent = "Pro активна — до 10 игроков в Co-op";
+    els.proStatus.className = "pro-status pro-active";
+    els.buyProBtn.classList.add("hidden");
+  } else {
+    els.proStatus.textContent = "Обычный доступ — до 3 игроков в Co-op";
+    els.proStatus.className = "pro-status";
+    els.buyProBtn.classList.remove("hidden");
+    els.buyProBtn.disabled = subPurchasePending;
   }
 }
 
@@ -1447,7 +1522,7 @@ function closeAdminModal() {
 }
 
 async function loadAdminStats() {
-  if (user.id !== ADMIN_TG_ID || !tg?.initData) return;
+  if (!isAdmin || !tg?.initData) return;
 
   try {
     const res = await fetch("/api/admin/stats", {
@@ -1493,6 +1568,9 @@ function renderAdmin() {
     .join("");
   els.adminPurchases.innerHTML = `
     <div class="admin-card"><span>Возрождений куплено</span><strong>${purchases.revives ?? 0}</strong></div>
+    <div class="admin-card"><span>Подписок продано</span><strong>${purchases.subscriptions ?? 0}</strong></div>
+    <div class="admin-card"><span>Активных подписок</span><strong>${purchases.activeSubscriptions ?? 0}</strong></div>
+    <div class="admin-card"><span>С привилегией</span><strong>${purchases.privilegedUsers ?? 0}</strong></div>
     ${skinCards}
   `;
 
@@ -1515,21 +1593,23 @@ function renderAdmin() {
   els.adminUsers.innerHTML = users.length
     ? users
         .map((item) => {
+          const isAdminUser = item.id === ADMIN_TG_ID;
+          const banBtn = isAdminUser ? "" : item.banned
+            ? `<button class="ban-btn unban" data-unban-user="${item.id}">Разбанить</button>`
+            : `<button class="ban-btn ban" data-ban-user="${item.id}">Забанить</button>`;
+          const privBtn = isAdminUser ? "" : item.isPrivileged
+            ? `<button class="ban-btn unban" data-revoke-privilege="${item.id}">Убрать безлимит</button>`
+            : `<button class="ban-btn" data-grant-privilege="${item.id}">Дать безлимит</button>`;
           return `
             <div class="admin-item">
               <div class="admin-item-top">
                 <strong>${escapeHtml(item.name)}</strong>
-                <span>${item.banned ? "Забанен" : "Активен"}</span>
+                <span>${item.banned ? "Забанен" : item.isPrivileged ? "Безлимит" : "Активен"}</span>
               </div>
               <div class="admin-meta">Игры: ${item.games} · Победы: ${item.wins} · Очки: ${item.totalScore}</div>
               <div class="admin-actions">
-                ${
-                  item.id === ADMIN_TG_ID
-                    ? ""
-                    : item.banned
-                    ? `<button class="ban-btn unban" data-unban-user="${item.id}">Разбанить</button>`
-                    : `<button class="ban-btn ban" data-ban-user="${item.id}">Забанить</button>`
-                }
+                ${banBtn}
+                ${privBtn}
               </div>
             </div>
           `;
@@ -1574,16 +1654,41 @@ function renderAdmin() {
 
 function bindAdminButtons() {
   document.querySelectorAll("[data-ban-user]").forEach((btn) => {
-    btn.onclick = async () => {
-      await setBan(btn.dataset.banUser, true);
-    };
+    btn.onclick = async () => { await setBan(btn.dataset.banUser, true); };
   });
 
   document.querySelectorAll("[data-unban-user]").forEach((btn) => {
-    btn.onclick = async () => {
-      await setBan(btn.dataset.unbanUser, false);
-    };
+    btn.onclick = async () => { await setBan(btn.dataset.unbanUser, false); };
   });
+
+  document.querySelectorAll("[data-grant-privilege]").forEach((btn) => {
+    btn.onclick = async () => { await setPrivilege(btn.dataset.grantPrivilege, true); };
+  });
+
+  document.querySelectorAll("[data-revoke-privilege]").forEach((btn) => {
+    btn.onclick = async () => { await setPrivilege(btn.dataset.revokePrivilege, false); };
+  });
+}
+
+async function setPrivilege(userId, grant) {
+  if (!userId) return;
+  const endpoint = grant ? "/api/admin/grant-privilege" : "/api/admin/revoke-privilege";
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": tg.initData,
+      },
+      body: JSON.stringify({ userId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    toast(grant ? "Безлимит выдан" : "Безлимит отозван");
+    await loadAdminStats();
+  } catch (e) {
+    toast(e.message || "Ошибка");
+  }
 }
 
 async function setBan(userId, banned) {

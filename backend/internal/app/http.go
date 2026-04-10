@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -16,6 +17,9 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/admin/unban", s.handleAdminUnban)
 	mux.HandleFunc("/api/internal/revive", s.handleInternalRevive)
 	mux.HandleFunc("/api/internal/purchase_skin", s.handleInternalPurchaseSkin)
+	mux.HandleFunc("/api/internal/subscribe", s.handleInternalSubscribe)
+	mux.HandleFunc("/api/admin/grant-privilege", s.handleAdminGrantPrivilege)
+	mux.HandleFunc("/api/admin/revoke-privilege", s.handleAdminRevokePrivilege)
 	mux.HandleFunc("/ws", s.handleWS)
 	return mux
 }
@@ -107,6 +111,15 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	var totalRevives int
 	_ = s.db.QueryRow(r.Context(), `select count(*) from purchases where type = 'revive'`).Scan(&totalRevives)
 
+	var totalSubscriptions int
+	_ = s.db.QueryRow(r.Context(), `select count(*) from purchases where type = 'subscription'`).Scan(&totalSubscriptions)
+
+	var activeSubscriptions int
+	_ = s.db.QueryRow(r.Context(), `select count(*) from subscriptions where expires_at > now()`).Scan(&activeSubscriptions)
+
+	var privilegedCount int
+	_ = s.db.QueryRow(r.Context(), `select count(*) from privileged_users`).Scan(&privilegedCount)
+
 	skinRows, err := s.db.Query(r.Context(), `select skin_id, count(*)::int from purchases where type = 'skin' group by skin_id`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -141,8 +154,11 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		},
 		"byMode": byMode,
 		"purchases": map[string]any{
-			"revives": totalRevives,
-			"skins":   skinPurchases,
+			"revives":            totalRevives,
+			"skins":              skinPurchases,
+			"subscriptions":      totalSubscriptions,
+			"activeSubscriptions": activeSubscriptions,
+			"privilegedUsers":    privilegedCount,
 		},
 		"leaderboard":   leaderboard,
 		"users":         users,
@@ -293,7 +309,8 @@ select
   coalesce(st.wins, 0)::int as wins,
   coalesce(st.total_score, 0)::int as total_score,
   u.last_seen,
-  (b.user_id is not null) as banned
+  (b.user_id is not null) as banned,
+  (p.user_id is not null) as is_privileged
 from users u
 left join (
   select
@@ -305,6 +322,7 @@ left join (
   group by mp.user_id
 ) st on st.user_id = u.id
 left join banned_users b on b.user_id = u.id
+left join privileged_users p on p.user_id = u.id
 order by games desc, wins desc, total_score desc, u.last_seen desc
 limit 15
 `)
@@ -324,6 +342,7 @@ limit 15
 			&item.TotalScore,
 			&item.LastSeen,
 			&item.Banned,
+			&item.IsPrivileged,
 		); err != nil {
 			return nil, err
 		}
@@ -342,7 +361,8 @@ select
   coalesce(st.wins, 0)::int as wins,
   coalesce(st.total_score, 0)::int as total_score,
   u.last_seen,
-  (b.user_id is not null) as banned
+  (b.user_id is not null) as banned,
+  (p.user_id is not null) as is_privileged
 from users u
 left join (
   select
@@ -354,6 +374,7 @@ left join (
   group by mp.user_id
 ) st on st.user_id = u.id
 left join banned_users b on b.user_id = u.id
+left join privileged_users p on p.user_id = u.id
 order by u.last_seen desc
 limit 25
 `)
@@ -373,6 +394,7 @@ limit 25
 			&item.TotalScore,
 			&item.LastSeen,
 			&item.Banned,
+			&item.IsPrivileged,
 		); err != nil {
 			return nil, err
 		}
@@ -440,7 +462,7 @@ func (s *Server) handleInternalRevive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Secret != s.cfg.InternalSecret {
+	if subtle.ConstantTimeCompare([]byte(req.Secret), []byte(s.cfg.InternalSecret)) != 1 {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
 		return
 	}
@@ -470,7 +492,7 @@ func (s *Server) handleInternalPurchaseSkin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if req.Secret != s.cfg.InternalSecret {
+	if subtle.ConstantTimeCompare([]byte(req.Secret), []byte(s.cfg.InternalSecret)) != 1 {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
 		return
 	}
@@ -488,6 +510,146 @@ func (s *Server) handleInternalPurchaseSkin(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.recordPurchase(req.PlayerID, "skin", req.SkinID, 49)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleInternalSubscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Secret   string `json:"secret"`
+		PlayerID string `json:"playerId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad request"})
+		return
+	}
+
+	if subtle.ConstantTimeCompare([]byte(req.Secret), []byte(s.cfg.InternalSecret)) != 1 {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+
+	req.PlayerID = strings.TrimSpace(req.PlayerID)
+	if req.PlayerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "playerId is required"})
+		return
+	}
+
+	if err := s.activateSubscription(req.PlayerID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	s.recordPurchase(req.PlayerID, "subscription", "", 259)
+
+	// Notify connected client immediately
+	s.mu.RLock()
+	c := s.clients[req.PlayerID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.HasSubscription = true
+		s.send(c, map[string]any{
+			"type":            "subscription_activated",
+			"hasSubscription": true,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminGrantPrivilege(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	adminID, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
+		return
+	}
+
+	if err := s.grantUserPrivilege(req.UserID, adminID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Update connected client immediately
+	s.mu.RLock()
+	c := s.clients[req.UserID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.IsPrivileged = true
+		s.send(c, map[string]any{
+			"type":         "privilege_granted",
+			"isPrivileged": true,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminRevokePrivilege(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	_, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId is required"})
+		return
+	}
+
+	if err := s.revokeUserPrivilege(req.UserID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Update connected client immediately
+	s.mu.RLock()
+	c := s.clients[req.UserID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.IsPrivileged = false
+		s.send(c, map[string]any{
+			"type":         "privilege_revoked",
+			"isPrivileged": false,
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

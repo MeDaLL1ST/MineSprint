@@ -8,13 +8,15 @@ import (
 )
 
 type Client struct {
-	ID          string
-	Name        string
-	Username    string
-	Conn        *websocket.Conn
-	Send        chan []byte
-	ActiveSkin  string
-	OwnedSkins  []string
+	ID              string
+	Name            string
+	Username        string
+	Conn            *websocket.Conn
+	Send            chan []byte
+	ActiveSkin      string
+	OwnedSkins      []string
+	HasSubscription bool
+	IsPrivileged    bool
 }
 
 type Cell struct {
@@ -127,13 +129,14 @@ type LeaderboardEntry struct {
 }
 
 type AdminTopUser struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Games      int       `json:"games"`
-	Wins       int       `json:"wins"`
-	TotalScore int       `json:"totalScore"`
-	LastSeen   time.Time `json:"lastSeen"`
-	Banned     bool      `json:"banned"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Games        int       `json:"games"`
+	Wins         int       `json:"wins"`
+	TotalScore   int       `json:"totalScore"`
+	LastSeen     time.Time `json:"lastSeen"`
+	Banned       bool      `json:"banned"`
+	IsPrivileged bool      `json:"isPrivileged"`
 }
 
 type AdminRecentMatch struct {

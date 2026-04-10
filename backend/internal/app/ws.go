@@ -56,8 +56,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			"name":     client.Name,
 			"username": client.Username,
 		},
-		"activeSkin": client.ActiveSkin,
-		"ownedSkins": client.OwnedSkins,
+		"activeSkin":      client.ActiveSkin,
+		"ownedSkins":      client.OwnedSkins,
+		"hasSubscription": client.HasSubscription,
+		"isPrivileged":    client.IsPrivileged,
+		"isAdmin":         client.ID == s.cfg.AdminTGID,
 	})
 
 	for {
@@ -70,10 +73,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) registerClient(c *Client) {
-	// Load skin info before acquiring server lock (DB call outside critical section)
+	// Load user data before acquiring server lock (DB calls outside critical section)
 	ctx := context.Background()
 	c.ActiveSkin = s.getUserActiveSkin(ctx, c.ID)
 	c.OwnedSkins = s.getUserOwnedSkins(ctx, c.ID)
+	c.HasSubscription = s.isUserSubscribed(ctx, c.ID)
+	c.IsPrivileged = s.isUserPrivileged(ctx, c.ID)
 
 	s.mu.Lock()
 	if prev, ok := s.clients[c.ID]; ok && prev != c {
@@ -138,6 +143,8 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.handleSkinPurchaseRequest(c, act.SkinID)
 	case "select_skin":
 		s.handleSelectSkin(c, act.SkinID)
+	case "subscribe_request":
+		s.handleSubscribeRequest(c)
 	default:
 		s.sendError(c, "Неизвестное действие")
 	}
@@ -327,6 +334,9 @@ func (s *Server) purchaseSkinForPlayer(playerID, skinID string) error {
 var validSkinIDs = map[string]bool{
 	"matrix": true,
 	"sunset": true,
+	"ocean":  true,
+	"neon":   true,
+	"arctic": true,
 }
 
 func (s *Server) handleSkinPurchaseRequest(c *Client, skinID string) {
@@ -405,6 +415,60 @@ func (s *Server) handleSelectSkin(c *Client, skinID string) {
 			"ownedSkins": c.OwnedSkins,
 		})
 	}
+}
+
+func (s *Server) handleSubscribeRequest(c *Client) {
+	if c.HasSubscription {
+		s.sendError(c, "У вас уже есть активная подписка")
+		return
+	}
+
+	url, err := s.createSubscriptionInvoiceLink(c.ID)
+	if err != nil {
+		s.sendError(c, fmt.Sprintf("Не удалось создать платёж: %v", err))
+		return
+	}
+
+	s.send(c, map[string]any{
+		"type":    "invoice_link",
+		"url":     url,
+		"subPending": true,
+	})
+}
+
+func (s *Server) createSubscriptionInvoiceLink(playerID string) (string, error) {
+	payload := "sub:" + playerID
+
+	reqBody, err := json.Marshal(map[string]any{
+		"title":          "Pro подписка",
+		"description":    "До 10 игроков в Co-op комнатах на 30 дней",
+		"payload":        payload,
+		"currency":       "XTR",
+		"prices":         []map[string]any{{"label": "Pro подписка (30 дней)", "amount": 259}},
+		"provider_token": "",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
+	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool   `json:"ok"`
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK {
+		return "", fmt.Errorf("telegram API error")
+	}
+	return result.Result, nil
 }
 
 func (s *Server) createSkinInvoiceLink(skinID, playerID string) (string, error) {

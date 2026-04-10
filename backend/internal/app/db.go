@@ -93,6 +93,18 @@ create table if not exists purchases (
   amount_stars int not null default 0,
   created_at timestamptz not null default now()
 );
+
+create table if not exists subscriptions (
+  user_id text primary key references users(id) on delete cascade,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists privileged_users (
+  user_id text primary key references users(id) on delete cascade,
+  granted_by text not null,
+  granted_at timestamptz not null default now()
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -344,6 +356,55 @@ func nullableString(v string) any {
 		return nil
 	}
 	return v
+}
+
+func (s *Server) isUserSubscribed(ctx context.Context, userID string) bool {
+	var exists bool
+	_ = s.db.QueryRow(ctx,
+		`select exists(select 1 from subscriptions where user_id = $1 and expires_at > now())`,
+		userID,
+	).Scan(&exists)
+	return exists
+}
+
+func (s *Server) isUserPrivileged(ctx context.Context, userID string) bool {
+	var exists bool
+	_ = s.db.QueryRow(ctx,
+		`select exists(select 1 from privileged_users where user_id = $1)`,
+		userID,
+	).Scan(&exists)
+	return exists
+}
+
+func (s *Server) activateSubscription(userID string) error {
+	_, err := s.db.Exec(context.Background(),
+		`insert into subscriptions (user_id, expires_at)
+         values ($1, now() + interval '30 days')
+         on conflict (user_id) do update
+         set expires_at = greatest(subscriptions.expires_at, now()) + interval '30 days'`,
+		userID,
+	)
+	return err
+}
+
+func (s *Server) grantUserPrivilege(userID, grantedBy string) error {
+	_, err := s.db.Exec(context.Background(),
+		`insert into privileged_users (user_id, granted_by, granted_at)
+         values ($1, $2, now())
+         on conflict (user_id) do update
+         set granted_by = excluded.granted_by,
+             granted_at = now()`,
+		userID, grantedBy,
+	)
+	return err
+}
+
+func (s *Server) revokeUserPrivilege(userID string) error {
+	_, err := s.db.Exec(context.Background(),
+		`delete from privileged_users where user_id = $1`,
+		userID,
+	)
+	return err
 }
 
 func matchResultForPlayer(g *Game, playerID string) string {
