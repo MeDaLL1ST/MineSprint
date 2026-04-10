@@ -84,6 +84,15 @@ create table if not exists user_active_skin (
   user_id text primary key references users(id) on delete cascade,
   skin_id text not null
 );
+
+create table if not exists purchases (
+  id bigserial primary key,
+  user_id text not null references users(id) on delete cascade,
+  type text not null,
+  skin_id text not null default '',
+  amount_stars int not null default 0,
+  created_at timestamptz not null default now()
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -210,6 +219,14 @@ func (s *Server) setActiveSkinDB(ctx context.Context, userID, skinID string) err
 		userID, skinID,
 	)
 	return err
+}
+
+func (s *Server) recordPurchase(userID, purchaseType, skinID string, amountStars int) {
+	_, _ = s.db.Exec(
+		context.Background(),
+		`insert into purchases (user_id, type, skin_id, amount_stars) values ($1, $2, $3, $4)`,
+		userID, purchaseType, skinID, amountStars,
+	)
 }
 
 func (s *Server) recordMove(matchID, userID, action string, cellsOpened int) {

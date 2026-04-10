@@ -104,6 +104,24 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var totalRevives int
+	_ = s.db.QueryRow(r.Context(), `select count(*) from purchases where type = 'revive'`).Scan(&totalRevives)
+
+	skinRows, err := s.db.Query(r.Context(), `select skin_id, count(*)::int from purchases where type = 'skin' group by skin_id`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	defer skinRows.Close()
+	skinPurchases := map[string]int{}
+	for skinRows.Next() {
+		var skinID string
+		var cnt int
+		if err := skinRows.Scan(&skinID, &cnt); err == nil {
+			skinPurchases[skinID] = cnt
+		}
+	}
+
 	s.mu.RLock()
 	liveUsers := len(s.clients)
 	liveRooms := len(s.rooms)
@@ -121,7 +139,11 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			"liveRooms":    liveRooms,
 			"liveGames":    liveGames,
 		},
-		"byMode":        byMode,
+		"byMode": byMode,
+		"purchases": map[string]any{
+			"revives": totalRevives,
+			"skins":   skinPurchases,
+		},
 		"leaderboard":   leaderboard,
 		"users":         users,
 		"topUsers":      topUsers,
@@ -428,6 +450,7 @@ func (s *Server) handleInternalRevive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.recordPurchase(req.PlayerID, "revive", "", 2)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -464,6 +487,7 @@ func (s *Server) handleInternalPurchaseSkin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	s.recordPurchase(req.PlayerID, "skin", req.SkinID, 49)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

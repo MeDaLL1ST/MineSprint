@@ -156,41 +156,9 @@
           </div>
         </div>
 
-        <details id="adminSection" class="section hidden admin-details">
-          <summary class="admin-toggle">
-            <span>Админка</span>
-            <span class="admin-arrow">▾</span>
-          </summary>
-
-          <div class="admin-panel">
-            <div class="section-head">
-              <span class="muted">Только для тебя</span>
-              <button id="refreshAdminBtn" class="mini-btn">Обновить</button>
-            </div>
-
-            <div id="adminSummary" class="admin-grid"></div>
-
-            <div class="admin-block">
-              <div class="admin-subtitle">Leaderboard</div>
-              <div id="adminLeaderboard" class="admin-list"></div>
-            </div>
-
-            <div class="admin-block">
-              <div class="admin-subtitle">Пользователи</div>
-              <div id="adminUsers" class="admin-list"></div>
-            </div>
-
-            <div class="admin-block">
-              <div class="admin-subtitle">Топ по играм</div>
-              <div id="adminTopUsers" class="admin-list"></div>
-            </div>
-
-            <div class="admin-block">
-              <div class="admin-subtitle">Последние матчи</div>
-              <div id="adminRecentMatches" class="admin-list"></div>
-            </div>
-          </div>
-        </details>
+        <div id="adminSection" class="section hidden">
+          <button id="openAdminBtn" class="btn btn-secondary">Открыть админку</button>
+        </div>
       </aside>
 
       <main class="card board-card">
@@ -300,6 +268,50 @@
         <button id="closeSkinsBtn" class="ghost-btn">Закрыть</button>
       </div>
       <div id="skinsGrid" class="skins-grid"></div>
+    </div>
+  </div>
+
+  <div id="adminModal" class="admin-modal hidden">
+    <div class="admin-modal-card">
+      <div class="admin-modal-header">
+        <div class="admin-modal-title">Админка</div>
+        <div class="admin-modal-actions">
+          <button id="refreshAdminBtn" class="admin-btn">Обновить</button>
+          <button id="closeAdminBtn" class="ghost-btn">Закрыть</button>
+        </div>
+      </div>
+
+      <div class="admin-modal-body">
+        <div class="admin-section">
+          <div class="admin-section-title">Общая статистика</div>
+          <div id="adminSummary" class="admin-grid"></div>
+        </div>
+
+        <div class="admin-section">
+          <div class="admin-section-title">Покупки</div>
+          <div id="adminPurchases" class="admin-grid"></div>
+        </div>
+
+        <div class="admin-section">
+          <div class="admin-section-title">Лидерборд</div>
+          <div id="adminLeaderboard" class="admin-list"></div>
+        </div>
+
+        <div class="admin-section">
+          <div class="admin-section-title">Последние пользователи</div>
+          <div id="adminUsers" class="admin-list"></div>
+        </div>
+
+        <div class="admin-section">
+          <div class="admin-section-title">Топ по играм</div>
+          <div id="adminTopUsers" class="admin-list"></div>
+        </div>
+
+        <div class="admin-section">
+          <div class="admin-section-title">Последние матчи</div>
+          <div id="adminRecentMatches" class="admin-list"></div>
+        </div>
+      </div>
     </div>
   </div>
 

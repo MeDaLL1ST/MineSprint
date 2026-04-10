@@ -33,6 +33,30 @@ const SKIN_CATALOG = [
     activeClass: "active-sunset",
     cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
   },
+  {
+    id: "ocean",
+    name: "Океан",
+    price: 49,
+    previewClass: "skin-preview-ocean",
+    activeClass: "active-ocean",
+    cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
+  },
+  {
+    id: "neon",
+    name: "Неон",
+    price: 49,
+    previewClass: "skin-preview-neon",
+    activeClass: "active-neon",
+    cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
+  },
+  {
+    id: "arctic",
+    name: "Арктика",
+    price: 49,
+    previewClass: "skin-preview-arctic",
+    activeClass: "active-arctic",
+    cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
+  },
 ];
 const DRAG_THRESHOLD = 10;
 const ZOOM_MIN = 0.7;
@@ -101,8 +125,12 @@ const els = {
   fieldModal: $("#fieldModal"),
 
   adminSection: $("#adminSection"),
+  openAdminBtn: $("#openAdminBtn"),
+  adminModal: $("#adminModal"),
+  closeAdminBtn: $("#closeAdminBtn"),
   refreshAdminBtn: $("#refreshAdminBtn"),
   adminSummary: $("#adminSummary"),
+  adminPurchases: $("#adminPurchases"),
   adminLeaderboard: $("#adminLeaderboard"),
   adminUsers: $("#adminUsers"),
   adminTopUsers: $("#adminTopUsers"),
@@ -294,6 +322,8 @@ function bindUI() {
   });
 
 
+  els.openAdminBtn.addEventListener("click", openAdminModal);
+  els.closeAdminBtn.addEventListener("click", closeAdminModal);
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
 
   els.boardPreview.addEventListener("mouseleave", clearHoverCell);
@@ -1406,6 +1436,16 @@ async function shareRoomLink() {
   }
 }
 
+function openAdminModal() {
+  els.adminModal.classList.remove("hidden");
+  if (!adminStats) loadAdminStats();
+  impact("light");
+}
+
+function closeAdminModal() {
+  els.adminModal.classList.add("hidden");
+}
+
 async function loadAdminStats() {
   if (user.id !== ADMIN_TG_ID || !tg?.initData) return;
 
@@ -1420,7 +1460,7 @@ async function loadAdminStats() {
     adminStats = data;
     renderAdmin();
   } catch (_) {
-    els.adminSummary.innerHTML = `<div class="placeholder">Не удалось загрузить админку</div>`;
+    els.adminSummary.innerHTML = `<div class="placeholder">Не удалось загрузить данные</div>`;
   }
 }
 
@@ -1429,6 +1469,7 @@ function renderAdmin() {
 
   const s = adminStats.summary || {};
   const byMode = adminStats.byMode || {};
+  const purchases = adminStats.purchases || {};
   const leaderboard = adminStats.leaderboard || [];
   const users = adminStats.users || [];
   const topUsers = adminStats.topUsers || [];
@@ -1443,6 +1484,16 @@ function renderAdmin() {
     <div class="admin-card"><span>Live rooms</span><strong>${s.liveRooms ?? 0}</strong></div>
     <div class="admin-card"><span>Solo</span><strong>${byMode.solo ?? 0}</strong></div>
     <div class="admin-card"><span>Co-op / Versus</span><strong>${(byMode.coop ?? 0) + (byMode.versus ?? 0)}</strong></div>
+  `;
+
+  const skinNames = { matrix: "Матрица", sunset: "Закат", ocean: "Океан", neon: "Неон", arctic: "Арктика" };
+  const skinPurchases = purchases.skins || {};
+  const skinCards = Object.entries(skinNames)
+    .map(([id, name]) => `<div class="admin-card"><span>${name}</span><strong>${skinPurchases[id] ?? 0}</strong></div>`)
+    .join("");
+  els.adminPurchases.innerHTML = `
+    <div class="admin-card"><span>Возрождений куплено</span><strong>${purchases.revives ?? 0}</strong></div>
+    ${skinCards}
   `;
 
   els.adminLeaderboard.innerHTML = leaderboard.length
@@ -1583,8 +1634,9 @@ function closeSkinsModal() {
 
 function renderSkinsGrid() {
   els.skinsGrid.innerHTML = "";
+  const isAdmin = user.id === ADMIN_TG_ID;
   SKIN_CATALOG.forEach((skin) => {
-    const isOwned = skin.price === 0 || ownedSkins.includes(skin.id);
+    const isOwned = skin.price === 0 || isAdmin || ownedSkins.includes(skin.id);
     const isActive = activeSkinId === skin.id;
     const isPending = skinPurchasePending === skin.id;
 
