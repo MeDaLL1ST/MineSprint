@@ -180,7 +180,7 @@
         </div>
 
         <div class="field-topbar">
-          <div class="field-counter">
+          <div id="topMinesCounter" class="field-counter">
             <span>Мин осталось</span>
             <strong id="topMinesValue">10</strong>
           </div>
@@ -189,6 +189,10 @@
             <strong id="topTimerValue">00:00</strong>
           </div>
           <div class="field-actions">
+            <label class="mines-toggle-label" title="Показывать счётчик мин">
+              <input type="checkbox" id="toggleMinesCheckbox" checked />
+              Мины
+            </label>
             <button id="openFieldBtn" class="ghost-btn">Открыть поле</button>
             <button id="openSkinsBtn" class="ghost-btn">🎨 Дизайн</button>
           </div>
@@ -225,7 +229,7 @@
           <button id="closeFieldBtn" class="ghost-btn">Закрыть</button>
 
           <div class="modal-counters">
-            <div class="field-counter">
+            <div id="modalMinesCounter" class="field-counter">
               <span>Мин осталось</span>
               <strong id="modalMinesValue">10</strong>
             </div>

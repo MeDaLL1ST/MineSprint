@@ -141,6 +141,8 @@ const els = {
   adminTopUsers: $("#adminTopUsers"),
   adminRecentMatches: $("#adminRecentMatches"),
 
+  toggleMinesCheckbox: $("#toggleMinesCheckbox"),
+
   toast: $("#toast"),
   boardCard: document.querySelector(".board-card"),
 };
@@ -162,6 +164,8 @@ let hasSubscription = false;
 let isPrivileged = false;
 let isAdmin = false;
 let subPurchasePending = false;
+
+let showMineCounter = true;
 
 let modalScale = 1;
 let modalOffsetX = 0;
@@ -336,6 +340,11 @@ function bindUI() {
     impact("medium");
   });
 
+  els.toggleMinesCheckbox.addEventListener("change", () => {
+    showMineCounter = els.toggleMinesCheckbox.checked;
+    document.body.classList.toggle("hide-mines", !showMineCounter);
+  });
+
   els.openAdminBtn.addEventListener("click", openAdminModal);
   els.closeAdminBtn.addEventListener("click", closeAdminModal);
   els.refreshAdminBtn.addEventListener("click", loadAdminStats);
@@ -387,7 +396,7 @@ function toggleInputMode() {
 function restartCurrentGame() {
   indicateGameAction("Перезапускаем...");
   if (state?.online) {
-    send({ type: "restart_room" });
+    send({ type: "restart_room", rows: getRows(), cols: getCols(), mines: getMines() });
   } else {
     send({
       type: "start_solo",
@@ -418,7 +427,7 @@ function applyPresetIfNeeded() {
 }
 
 function getMaxFieldSize() {
-  return (hasSubscription || isPrivileged || isAdmin) ? 50 : 30;
+  return (hasSubscription || isPrivileged || isAdmin || user.id === ADMIN_TG_ID) ? 50 : 30;
 }
 
 function normalizeInputs() {
@@ -1626,6 +1635,17 @@ function renderAdmin() {
           const privBtn = isAdminUser ? "" : item.isPrivileged
             ? `<button class="ban-btn unban" data-revoke-privilege="${item.id}">Убрать безлимит</button>`
             : `<button class="ban-btn" data-grant-privilege="${item.id}">Дать безлимит</button>`;
+          const skinBtns = isAdminUser ? "" : `
+            <div class="admin-skin-grant">
+              <span>Скин:</span>
+              <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="matrix">Matrix</button>
+              <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="sunset">Закат</button>
+              <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="ocean">Океан</button>
+              <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="neon">Неон</button>
+              <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="arctic">Арктика</button>
+              <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="all">Все</button>
+            </div>
+          `;
           return `
             <div class="admin-item">
               <div class="admin-item-top">
@@ -1637,6 +1657,7 @@ function renderAdmin() {
                 ${banBtn}
                 ${privBtn}
               </div>
+              ${skinBtns}
             </div>
           `;
         })
@@ -1694,6 +1715,10 @@ function bindAdminButtons() {
   document.querySelectorAll("[data-revoke-privilege]").forEach((btn) => {
     btn.onclick = async () => { await setPrivilege(btn.dataset.revokePrivilege, false); };
   });
+
+  document.querySelectorAll("[data-grant-skin]").forEach((btn) => {
+    btn.onclick = async () => { await setGrantSkin(btn.dataset.grantSkin, btn.dataset.skinId); };
+  });
 }
 
 async function setPrivilege(userId, grant) {
@@ -1712,6 +1737,25 @@ async function setPrivilege(userId, grant) {
     if (!res.ok) throw new Error(data.error || "request failed");
     toast(grant ? "Безлимит выдан" : "Безлимит отозван");
     await loadAdminStats();
+  } catch (e) {
+    toast(e.message || "Ошибка");
+  }
+}
+
+async function setGrantSkin(userId, skinId) {
+  if (!userId || !skinId) return;
+  try {
+    const res = await fetch("/api/admin/grant-skin", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": tg.initData,
+      },
+      body: JSON.stringify({ userId, skinId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    toast(skinId === "all" ? "Все скины выданы" : "Скин выдан");
   } catch (e) {
     toast(e.message || "Ошибка");
   }

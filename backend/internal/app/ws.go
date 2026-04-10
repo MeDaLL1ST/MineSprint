@@ -130,7 +130,7 @@ func (s *Server) handleAction(c *Client, act Action) {
 	case "leave_room":
 		s.leaveRoom(c)
 	case "restart_room":
-		s.restartRoom(c)
+		s.restartRoom(c, act.Rows, act.Cols, act.Mines)
 	case "reveal":
 		s.revealCell(c, act.Cell)
 	case "toggle_flag":
@@ -282,6 +282,46 @@ func (s *Server) handleReviveRequest(c *Client) {
 		"type": "invoice_link",
 		"url":  url,
 	})
+}
+
+// adminGrantSkin grants one or all skins to a user without charging them.
+// skinID may be "all" to grant every skin in the catalog.
+func (s *Server) adminGrantSkin(userID, skinID string) error {
+	ctx := context.Background()
+	if skinID == "all" {
+		for id := range validSkinIDs {
+			if _, err := s.db.Exec(ctx,
+				`insert into user_skins (user_id, skin_id) values ($1, $2) on conflict do nothing`,
+				userID, id,
+			); err != nil {
+				return err
+			}
+		}
+	} else {
+		if !validSkinIDs[skinID] {
+			return fmt.Errorf("неизвестный скин: %s", skinID)
+		}
+		if _, err := s.db.Exec(ctx,
+			`insert into user_skins (user_id, skin_id) values ($1, $2) on conflict do nothing`,
+			userID, skinID,
+		); err != nil {
+			return err
+		}
+	}
+
+	// Notify connected client immediately so they see the new skin
+	s.mu.RLock()
+	c := s.clients[userID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.OwnedSkins = s.getUserOwnedSkins(ctx, userID)
+		s.send(c, map[string]any{
+			"type":       "skin_purchased",
+			"activeSkin": c.ActiveSkin,
+			"ownedSkins": c.OwnedSkins,
+		})
+	}
+	return nil
 }
 
 // purchaseSkinForPlayer grants a skin to a connected player and pushes the update.

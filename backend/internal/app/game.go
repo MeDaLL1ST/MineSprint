@@ -196,7 +196,7 @@ func (s *Server) leaveRoom(c *Client) {
 	})
 }
 
-func (s *Server) restartRoom(c *Client) {
+func (s *Server) restartRoom(c *Client, newRows, newCols, newMines int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -226,6 +226,15 @@ func (s *Server) restartRoom(c *Client) {
 	mode, rows, cols, mines := game.Mode, game.Rows, game.Cols, game.Mines
 	roomCode, ownerID, oldID := game.RoomCode, game.OwnerID, game.ID
 	game.mu.Unlock()
+
+	// If the caller is the room owner and provides a new valid config, apply it.
+	if c.ID == ownerID && newRows > 0 && newCols > 0 && newMines > 0 {
+		if err := validateConfig(newRows, newCols, newMines, s.maxFieldSize(c)); err != nil {
+			s.sendError(c, err.Error())
+			return
+		}
+		rows, cols, mines = newRows, newCols, newMines
+	}
 
 	next := newGame(mode, rows, cols, mines, players, names, oldSkins)
 	next.RoomCode = roomCode
