@@ -86,8 +86,15 @@
             <button class="mini-btn" data-preset="12x12x24">12×12×24</button>
             <button class="mini-btn" data-preset="16x16x40">16×16×40</button>
           </div>
+          <label class="mines-toggle-label" id="minesToggleLabel" title="Применяется при старте или рестарте игры">
+            <input type="checkbox" id="toggleMinesCheckbox" checked />
+            <span>Показывать счётчик мин</span>
+          </label>
           <div class="hint">
             Для больших полей используй кнопку «Открыть поле».
+          </div>
+          <div id="fieldSizeHint" class="hint hint-upgrade hidden">
+            Поля больше 30×30 доступны с <strong>Pro подпиской</strong> (⭐ 259/мес).
           </div>
         </div>
 
@@ -165,6 +172,7 @@
           <button id="buyProBtn" class="btn btn-secondary hidden">⭐ 259 — Pro на 30 дней</button>
         </div>
 
+
         <div id="adminSection" class="section hidden">
           <button id="openAdminBtn" class="btn btn-secondary">Открыть админку</button>
         </div>
@@ -189,10 +197,6 @@
             <strong id="topTimerValue">00:00</strong>
           </div>
           <div class="field-actions">
-            <label class="mines-toggle-label" title="Показывать счётчик мин">
-              <input type="checkbox" id="toggleMinesCheckbox" checked />
-              Мины
-            </label>
             <button id="openFieldBtn" class="ghost-btn">Открыть поле</button>
             <button id="openSkinsBtn" class="ghost-btn">🎨 Дизайн</button>
           </div>

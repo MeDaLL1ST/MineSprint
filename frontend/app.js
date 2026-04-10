@@ -142,6 +142,8 @@ const els = {
   adminRecentMatches: $("#adminRecentMatches"),
 
   toggleMinesCheckbox: $("#toggleMinesCheckbox"),
+  minesToggleLabel: $("#minesToggleLabel"),
+  fieldSizeHint: $("#fieldSizeHint"),
 
   toast: $("#toast"),
   boardCard: document.querySelector(".board-card"),
@@ -760,6 +762,17 @@ function renderRoomControls() {
     const owner = state.players?.find((p) => p.id === state.ownerId);
     els.roomOwnerValue.textContent = owner?.name || state.ownerId || "-";
   }
+
+  const gameActive = !!(state && !state.over);
+  if (els.toggleMinesCheckbox) {
+    els.toggleMinesCheckbox.disabled = gameActive;
+  }
+  if (els.minesToggleLabel) {
+    els.minesToggleLabel.classList.toggle("disabled-label", gameActive);
+    els.minesToggleLabel.title = gameActive
+      ? "Нельзя изменить во время игры — только перед стартом или рестартом"
+      : "Показывать счётчик мин — применяется при старте или рестарте";
+  }
 }
 
 function renderStatus() {
@@ -773,23 +786,38 @@ function renderStatus() {
 function renderProStatus() {
   if (!els.proStatus || !els.buyProBtn) return;
   if (isAdmin) {
-    els.proStatus.textContent = "Безлимитный доступ (администратор)";
+    els.proStatus.innerHTML =
+      `<strong>Безлимитный доступ</strong> — администратор<br>` +
+      `<span class="pro-perks">Поля до 50×50 · Co-op до 10 игроков</span>`;
     els.proStatus.className = "pro-status pro-active";
     els.buyProBtn.classList.add("hidden");
   } else if (isPrivileged) {
-    els.proStatus.textContent = "Безлимитный доступ (выдан администратором)";
+    els.proStatus.innerHTML =
+      `<strong>Безлимитный доступ</strong> — выдан администратором<br>` +
+      `<span class="pro-perks">Поля до 50×50 · Co-op до 10 игроков</span>`;
     els.proStatus.className = "pro-status pro-active";
     els.buyProBtn.classList.add("hidden");
   } else if (hasSubscription) {
-    els.proStatus.textContent = "Pro активна — до 10 игроков в Co-op";
+    els.proStatus.innerHTML =
+      `<strong>Pro активна</strong><br>` +
+      `<span class="pro-perks">Поля до 50×50 · Co-op до 10 игроков</span>`;
     els.proStatus.className = "pro-status pro-active";
     els.buyProBtn.classList.add("hidden");
   } else {
-    els.proStatus.textContent = "Обычный доступ — до 3 игроков в Co-op";
+    els.proStatus.innerHTML =
+      `<strong>Обычный доступ</strong><br>` +
+      `<span class="pro-perks">Поля до 30×30 · Co-op до 3 игроков</span>`;
     els.proStatus.className = "pro-status";
     els.buyProBtn.classList.remove("hidden");
     els.buyProBtn.disabled = subPurchasePending;
   }
+  updateFieldSizeHint();
+}
+
+function updateFieldSizeHint() {
+  if (!els.fieldSizeHint) return;
+  const hasAccess = isAdmin || isPrivileged || hasSubscription || user.id === ADMIN_TG_ID;
+  els.fieldSizeHint.classList.toggle("hidden", hasAccess);
 }
 
 function renderStats() {
@@ -1717,7 +1745,7 @@ function bindAdminButtons() {
   });
 
   document.querySelectorAll("[data-grant-skin]").forEach((btn) => {
-    btn.onclick = async () => { await setGrantSkin(btn.dataset.grantSkin, btn.dataset.skinId); };
+    btn.onclick = async () => { await setGrantSkin(btn.dataset.grantSkin, btn.dataset.skinId, btn); };
   });
 }
 
@@ -1742,8 +1770,13 @@ async function setPrivilege(userId, grant) {
   }
 }
 
-async function setGrantSkin(userId, skinId) {
+async function setGrantSkin(userId, skinId, btn) {
   if (!userId || !skinId) return;
+  const origText = btn?.textContent ?? "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "…";
+  }
   try {
     const res = await fetch("/api/admin/grant-skin", {
       method: "POST",
@@ -1755,8 +1788,30 @@ async function setGrantSkin(userId, skinId) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "request failed");
+    if (btn) {
+      btn.textContent = "✓";
+      btn.classList.add("granted");
+      setTimeout(() => {
+        if (btn.isConnected) {
+          btn.textContent = origText;
+          btn.classList.remove("granted");
+          btn.disabled = false;
+        }
+      }, 2000);
+    }
     toast(skinId === "all" ? "Все скины выданы" : "Скин выдан");
   } catch (e) {
+    if (btn) {
+      btn.textContent = "✗";
+      btn.classList.add("grant-error");
+      setTimeout(() => {
+        if (btn.isConnected) {
+          btn.textContent = origText;
+          btn.classList.remove("grant-error");
+          btn.disabled = false;
+        }
+      }, 2000);
+    }
     toast(e.message || "Ошибка");
   }
 }
