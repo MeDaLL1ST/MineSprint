@@ -80,6 +80,7 @@ const els = {
 
   roomCard: $("#roomCard"),
   roomCodeValue: $("#roomCodeValue"),
+  copyCodeBtn: $("#copyCodeBtn"),
   roomModeValue: $("#roomModeValue"),
   roomOwnerValue: $("#roomOwnerValue"),
   shareBtn: $("#shareBtn"),
@@ -286,6 +287,7 @@ function bindUI() {
   });
 
   els.shareBtn.addEventListener("click", shareRoomLink);
+  els.copyCodeBtn.addEventListener("click", copyRoomCode);
   els.leaveRoomBtn.addEventListener("click", () => send({ type: "leave_room" }));
   els.restartRoomBtn.addEventListener("click", restartCurrentGame);
   els.overlayActionBtn.addEventListener("click", restartCurrentGame);
@@ -1483,6 +1485,21 @@ function prettyMode(mode) {
 function getShareLink() {
   if (!state?.roomCode) return "";
   return state.shareLink || state.inviteLink || `${location.origin}/?room=${state.roomCode}`;
+}
+
+async function copyRoomCode() {
+  const code = state?.roomCode;
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(code);
+    const btn = els.copyCodeBtn;
+    const prev = btn.textContent;
+    btn.textContent = "✓";
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+    impact("light");
+  } catch (_) {
+    toast(state.roomCode);
+  }
 }
 
 async function shareRoomLink() {

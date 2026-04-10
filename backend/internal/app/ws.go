@@ -371,11 +371,11 @@ func (s *Server) handleSelectSkin(c *Client, skinID string) {
 		skinID = "default"
 	}
 
-	// Validate ownership (default is always available)
-	if skinID != "default" {
+	// Validate ownership (default always free; admin bypasses ownership check)
+	if skinID != "default" && c.ID != s.cfg.AdminTGID {
 		owned := false
-		for _, s := range c.OwnedSkins {
-			if s == skinID {
+		for _, owned_skin := range c.OwnedSkins {
+			if owned_skin == skinID {
 				owned = true
 				break
 			}
