@@ -28,8 +28,16 @@ func (s *Server) getCoopCapacity(ownerID string) int {
 	return 3
 }
 
+// maxFieldSize returns the maximum allowed board dimension for a client.
+func (s *Server) maxFieldSize(c *Client) int {
+	if c.ID == s.cfg.AdminTGID || c.IsPrivileged || c.HasSubscription {
+		return 50
+	}
+	return 30
+}
+
 func (s *Server) startSolo(c *Client, rows, cols, mines int) {
-	if err := validateConfig(rows, cols, mines); err != nil {
+	if err := validateConfig(rows, cols, mines, s.maxFieldSize(c)); err != nil {
 		s.sendError(c, err.Error())
 		return
 	}
@@ -51,7 +59,7 @@ func (s *Server) createRoom(c *Client, mode string, rows, cols, mines int) {
 		s.sendError(c, "Для комнаты доступны только coop и versus")
 		return
 	}
-	if err := validateConfig(rows, cols, mines); err != nil {
+	if err := validateConfig(rows, cols, mines, s.maxFieldSize(c)); err != nil {
 		s.sendError(c, err.Error())
 		return
 	}
@@ -293,9 +301,10 @@ func (s *Server) revealCell(c *Client, idx int) {
 		return
 	}
 
+	game.OpenedSafe += openedCount
 	game.Scores[c.ID] += openedCount
 
-	if allSafeOpened(game) {
+	if game.OpenedSafe == len(game.Board)-game.Mines {
 		game.Over = true
 		game.EndedAt = time.Now()
 		game.EndReason = "clear"
@@ -389,14 +398,16 @@ func (s *Server) toggleFlag(c *Client, idx int) {
 	var action string
 	if cell.Flagged {
 		cell.Flagged = false
+		game.FlaggedCount--
 		action = "unflag"
 	} else {
-		if countFlagged(game) >= game.Mines {
+		if game.FlaggedCount >= game.Mines {
 			game.mu.Unlock()
 			s.sendError(c, "Лимит флагов достигнут")
 			return
 		}
 		cell.Flagged = true
+		game.FlaggedCount++
 		action = "flag"
 	}
 
@@ -571,7 +582,7 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		return players[i].Score > players[j].Score
 	})
 
-	flagsLeft := g.Mines - countFlagged(g)
+	flagsLeft := g.Mines - g.FlaggedCount
 	if flagsLeft < 0 {
 		flagsLeft = 0
 	}
@@ -732,12 +743,12 @@ func normalizeMode(mode string) string {
 	}
 }
 
-func validateConfig(rows, cols, mines int) error {
-	if rows < 5 || rows > 30 {
-		return fmt.Errorf("rows: допустимо от 5 до 30")
+func validateConfig(rows, cols, mines, maxSize int) error {
+	if rows < 5 || rows > maxSize {
+		return fmt.Errorf("rows: допустимо от 5 до %d", maxSize)
 	}
-	if cols < 5 || cols > 30 {
-		return fmt.Errorf("cols: допустимо от 5 до 30")
+	if cols < 5 || cols > maxSize {
+		return fmt.Errorf("cols: допустимо от 5 до %d", maxSize)
 	}
 	maxMines := rows*cols - 1
 	if mines < 1 || mines > maxMines {
@@ -888,25 +899,6 @@ func floodOpen(g *Game, start int, playerID string) int {
 	return opened
 }
 
-func allSafeOpened(g *Game) bool {
-	openedSafe := 0
-	for _, cell := range g.Board {
-		if !cell.Mine && cell.Opened {
-			openedSafe++
-		}
-	}
-	return openedSafe == len(g.Board)-g.Mines
-}
-
-func countFlagged(g *Game) int {
-	n := 0
-	for _, cell := range g.Board {
-		if cell.Flagged {
-			n++
-		}
-	}
-	return n
-}
 
 func determineVersusWinner(g *Game, excludeID string) string {
 	bestScore := -1

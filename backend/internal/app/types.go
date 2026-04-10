@@ -51,6 +51,8 @@ type Game struct {
 	OwnerID        string
 	LastAction     time.Time
 	RevivedPlayers map[string]bool
+	OpenedSafe     int // cached count of opened non-mine cells
+	FlaggedCount   int // cached count of flagged cells
 }
 
 type Room struct {

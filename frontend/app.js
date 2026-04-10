@@ -417,12 +417,17 @@ function applyPresetIfNeeded() {
   els.minesInput.value = String(preset.mines);
 }
 
+function getMaxFieldSize() {
+  return (hasSubscription || isPrivileged || isAdmin) ? 50 : 30;
+}
+
 function normalizeInputs() {
+  const maxSize = getMaxFieldSize();
   let rows = getInputPreviewValue(els.rowsInput, 9);
   let cols = getInputPreviewValue(els.colsInput, 9);
 
-  rows = clamp(rows, 5, 30);
-  cols = clamp(cols, 5, 30);
+  rows = clamp(rows, 5, maxSize);
+  cols = clamp(cols, 5, maxSize);
 
   const maxMines = Math.max(1, rows * cols - 1);
   let mines = getInputPreviewValue(els.minesInput, Math.min(10, maxMines));
@@ -1440,6 +1445,8 @@ function defaultZoomForState(gameState) {
 
 function getPreviewBaseCellSize(cols) {
   const w = window.innerWidth;
+  if (cols >= 40) return w < 420 ? 8 : w < 700 ? 9 : 10;
+  if (cols >= 30) return w < 420 ? 9 : w < 700 ? 10 : 11;
   if (cols >= 24) return w < 420 ? 11 : w < 700 ? 12 : 13;
   if (cols >= 16) return w < 420 ? 13 : w < 700 ? 15 : 17;
   if (cols >= 12) return w < 420 ? 16 : w < 700 ? 18 : 22;
@@ -1448,6 +1455,8 @@ function getPreviewBaseCellSize(cols) {
 
 function getModalBaseCellSize(cols) {
   const w = window.innerWidth;
+  if (cols >= 40) return w < 420 ? 10 : w < 700 ? 12 : 14;
+  if (cols >= 30) return w < 420 ? 12 : w < 700 ? 14 : 16;
   if (cols >= 24) return w < 420 ? 14 : w < 700 ? 16 : 18;
   if (cols >= 16) return w < 420 ? 18 : w < 700 ? 22 : 26;
   if (cols >= 12) return w < 420 ? 22 : w < 700 ? 26 : 30;
