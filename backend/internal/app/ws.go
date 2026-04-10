@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -55,6 +56,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			"name":     client.Name,
 			"username": client.Username,
 		},
+		"activeSkin": client.ActiveSkin,
+		"ownedSkins": client.OwnedSkins,
 	})
 
 	for {
@@ -67,6 +70,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) registerClient(c *Client) {
+	// Load skin info before acquiring server lock (DB call outside critical section)
+	ctx := context.Background()
+	c.ActiveSkin = s.getUserActiveSkin(ctx, c.ID)
+	c.OwnedSkins = s.getUserOwnedSkins(ctx, c.ID)
+
 	s.mu.Lock()
 	if prev, ok := s.clients[c.ID]; ok && prev != c {
 		close(prev.Send)
@@ -126,6 +134,10 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.setHover(c, act.Cell)
 	case "revive_request":
 		s.handleReviveRequest(c)
+	case "skin_purchase_request":
+		s.handleSkinPurchaseRequest(c, act.SkinID)
+	case "select_skin":
+		s.handleSelectSkin(c, act.SkinID)
 	default:
 		s.sendError(c, "Неизвестное действие")
 	}
@@ -263,6 +275,180 @@ func (s *Server) handleReviveRequest(c *Client) {
 		"type": "invoice_link",
 		"url":  url,
 	})
+}
+
+// purchaseSkinForPlayer grants a skin to a connected player and pushes the update.
+func (s *Server) purchaseSkinForPlayer(playerID, skinID string) error {
+	ctx := context.Background()
+	if err := s.purchaseSkinDB(ctx, playerID, skinID); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	c := s.clients[playerID]
+	s.mu.RUnlock()
+
+	if c == nil {
+		return nil // Player offline — skin saved in DB, they'll see it on next login
+	}
+
+	c.OwnedSkins = s.getUserOwnedSkins(ctx, playerID)
+	c.ActiveSkin = skinID
+
+	// Update in current game
+	s.mu.RLock()
+	gameID, ok := s.playerGame[playerID]
+	var game *Game
+	if ok {
+		game = s.games[gameID]
+	}
+	s.mu.RUnlock()
+
+	if game != nil {
+		game.mu.Lock()
+		if game.Skins == nil {
+			game.Skins = map[string]string{}
+		}
+		game.Skins[playerID] = skinID
+		msgs := s.buildBroadcastMsgs(game)
+		game.mu.Unlock()
+		s.sendBroadcast(msgs)
+	} else {
+		s.send(c, map[string]any{
+			"type":       "skin_purchased",
+			"skinId":     skinID,
+			"activeSkin": skinID,
+			"ownedSkins": c.OwnedSkins,
+		})
+	}
+	return nil
+}
+
+var validSkinIDs = map[string]bool{
+	"matrix": true,
+	"sunset": true,
+}
+
+func (s *Server) handleSkinPurchaseRequest(c *Client, skinID string) {
+	if !validSkinIDs[skinID] {
+		s.sendError(c, "Неизвестный скин")
+		return
+	}
+
+	// Check if already owned
+	for _, owned := range c.OwnedSkins {
+		if owned == skinID {
+			s.sendError(c, "Скин уже куплен")
+			return
+		}
+	}
+
+	url, err := s.createSkinInvoiceLink(skinID, c.ID)
+	if err != nil {
+		s.sendError(c, fmt.Sprintf("Не удалось создать платёж: %v", err))
+		return
+	}
+
+	s.send(c, map[string]any{
+		"type":   "invoice_link",
+		"url":    url,
+		"skinId": skinID,
+	})
+}
+
+func (s *Server) handleSelectSkin(c *Client, skinID string) {
+	if skinID == "" {
+		skinID = "default"
+	}
+
+	// Validate ownership (default is always available)
+	if skinID != "default" {
+		owned := false
+		for _, s := range c.OwnedSkins {
+			if s == skinID {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			s.sendError(c, "Скин не куплен")
+			return
+		}
+	}
+
+	c.ActiveSkin = skinID
+	_ = s.setActiveSkinDB(context.Background(), c.ID, skinID)
+
+	// Update skin in current game and broadcast
+	s.mu.RLock()
+	gameID, ok := s.playerGame[c.ID]
+	var game *Game
+	if ok {
+		game = s.games[gameID]
+	}
+	s.mu.RUnlock()
+
+	if game != nil {
+		game.mu.Lock()
+		if game.Skins == nil {
+			game.Skins = map[string]string{}
+		}
+		game.Skins[c.ID] = skinID
+		msgs := s.buildBroadcastMsgs(game)
+		game.mu.Unlock()
+		s.sendBroadcast(msgs)
+	} else {
+		// No active game — just confirm back to the client
+		s.send(c, map[string]any{
+			"type":       "skin_selected",
+			"activeSkin": skinID,
+			"ownedSkins": c.OwnedSkins,
+		})
+	}
+}
+
+func (s *Server) createSkinInvoiceLink(skinID, playerID string) (string, error) {
+	skinNames := map[string]string{
+		"matrix": "Матрица",
+		"sunset": "Закат",
+	}
+	title := skinNames[skinID]
+	if title == "" {
+		title = skinID
+	}
+
+	payload := "skin:" + skinID
+
+	reqBody, err := json.Marshal(map[string]any{
+		"title":          "Скин «" + title + "»",
+		"description":    "Дизайн поля «" + title + "» навсегда",
+		"payload":        payload,
+		"currency":       "XTR",
+		"prices":         []map[string]any{{"label": "Скин", "amount": 49}},
+		"provider_token": "",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
+	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool   `json:"ok"`
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK {
+		return "", fmt.Errorf("telegram API error")
+	}
+	return result.Result, nil
 }
 
 func (s *Server) createInvoiceLink(gameID, playerID string) (string, error) {

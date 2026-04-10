@@ -8,11 +8,13 @@ import (
 )
 
 type Client struct {
-	ID       string
-	Name     string
-	Username string
-	Conn     *websocket.Conn
-	Send     chan []byte
+	ID          string
+	Name        string
+	Username    string
+	Conn        *websocket.Conn
+	Send        chan []byte
+	ActiveSkin  string
+	OwnedSkins  []string
 }
 
 type Cell struct {
@@ -36,6 +38,7 @@ type Game struct {
 	Names          map[string]string
 	Scores         map[string]int
 	Hovers         map[string]int
+	Skins          map[string]string // playerID -> skinID
 	Over           bool
 	WinnerID       string
 	EndReason      string
@@ -57,13 +60,14 @@ type Room struct {
 }
 
 type Action struct {
-	Type  string `json:"type"`
-	Mode  string `json:"mode,omitempty"`
-	Code  string `json:"code,omitempty"`
-	Rows  int    `json:"rows,omitempty"`
-	Cols  int    `json:"cols,omitempty"`
-	Mines int    `json:"mines,omitempty"`
-	Cell  int    `json:"cell,omitempty"`
+	Type   string `json:"type"`
+	Mode   string `json:"mode,omitempty"`
+	Code   string `json:"code,omitempty"`
+	Rows   int    `json:"rows,omitempty"`
+	Cols   int    `json:"cols,omitempty"`
+	Mines  int    `json:"mines,omitempty"`
+	Cell   int    `json:"cell,omitempty"`
+	SkinID string `json:"skinId,omitempty"`
 }
 
 type ClientCell struct {
@@ -76,9 +80,10 @@ type ClientCell struct {
 }
 
 type PlayerBrief struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Score int    `json:"score"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Score  int    `json:"score"`
+	SkinID string `json:"skinId,omitempty"`
 }
 
 type State struct {
@@ -99,6 +104,7 @@ type State struct {
 	WinnerID   string         `json:"winnerId,omitempty"`
 	WinnerName string         `json:"winnerName,omitempty"`
 	StartedAt  int64          `json:"startedAt"`
+	EndedAt    int64          `json:"endedAt,omitempty"`
 	You        PlayerBrief    `json:"you"`
 	Players    []PlayerBrief  `json:"players"`
 	Hovers     map[string]int `json:"hovers,omitempty"`
@@ -106,6 +112,8 @@ type State struct {
 	Board      []ClientCell   `json:"board"`
 	EndReason  string         `json:"endReason,omitempty"`
 	CanRevive  bool           `json:"canRevive,omitempty"`
+	ActiveSkin string         `json:"activeSkin,omitempty"`
+	OwnedSkins []string       `json:"ownedSkins,omitempty"`
 }
 
 type LeaderboardEntry struct {

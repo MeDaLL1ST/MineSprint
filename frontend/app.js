@@ -7,6 +7,33 @@ tg?.setBackgroundColor?.("#0b1020");
 
 const ADMIN_TG_ID = "887152362";
 const LONG_PRESS_MS = 380;
+
+const SKIN_CATALOG = [
+  {
+    id: "default",
+    name: "Тёмный космос",
+    price: 0,
+    previewClass: "skin-preview-default",
+    activeClass: "active",
+    cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
+  },
+  {
+    id: "matrix",
+    name: "Матрица",
+    price: 49,
+    previewClass: "skin-preview-matrix",
+    activeClass: "active-matrix",
+    cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
+  },
+  {
+    id: "sunset",
+    name: "Закат",
+    price: 49,
+    previewClass: "skin-preview-sunset",
+    activeClass: "active-sunset",
+    cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
+  },
+];
 const DRAG_THRESHOLD = 10;
 const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 2.8;
@@ -49,6 +76,10 @@ const els = {
 
   openFieldBtn: $("#openFieldBtn"),
   closeFieldBtn: $("#closeFieldBtn"),
+  openSkinsBtn: $("#openSkinsBtn"),
+  closeSkinsBtn: $("#closeSkinsBtn"),
+  skinsModal: $("#skinsModal"),
+  skinsGrid: $("#skinsGrid"),
   zoomInBtn: $("#zoomInBtn"),
   zoomOutBtn: $("#zoomOutBtn"),
   fitZoomBtn: $("#fitZoomBtn"),
@@ -91,6 +122,9 @@ let reconnectTimer = null;
 let remoteHovers = {};
 let lastHoverCell = null;
 let frozenElapsedSec = 0;
+let activeSkinId = "default";
+let ownedSkins = ["default"];
+let skinPurchasePending = null; // skinId being purchased
 
 let modalScale = 1;
 let modalOffsetX = 0;
@@ -234,6 +268,11 @@ function bindUI() {
 
   els.openFieldBtn.addEventListener("click", openFieldModal);
   els.closeFieldBtn.addEventListener("click", closeFieldModal);
+  els.openSkinsBtn.addEventListener("click", openSkinsModal);
+  els.closeSkinsBtn.addEventListener("click", closeSkinsModal);
+  els.skinsModal.addEventListener("click", (e) => {
+    if (e.target === els.skinsModal) closeSkinsModal();
+  });
 
   els.zoomInBtn.addEventListener("click", () => {
     zoomKeepingViewport(clamp(modalScale + 0.15, ZOOM_MIN, ZOOM_MAX));
@@ -299,7 +338,6 @@ function getInputPreviewValue(input, fallback) {
 function toggleInputMode() {
   inputMode = inputMode === "open" ? "flag" : "open";
   renderModeButtons();
-  toast(inputMode === "open" ? "Режим: открыть" : "Режим: флаг");
 }
 
 function restartCurrentGame() {
@@ -405,6 +443,30 @@ function connect() {
 function handleMessage(msg) {
   if (msg.type === "hello") {
     els.userChip.textContent = msg.user?.name || user.name;
+    if (msg.activeSkin) {
+      activeSkinId = msg.activeSkin;
+      applySkin(activeSkinId);
+    }
+    if (Array.isArray(msg.ownedSkins)) {
+      ownedSkins = msg.ownedSkins;
+    }
+    return;
+  }
+
+  if (msg.type === "skin_selected" || msg.type === "skin_purchased") {
+    if (msg.activeSkin) {
+      activeSkinId = msg.activeSkin;
+      applySkin(activeSkinId);
+    }
+    if (Array.isArray(msg.ownedSkins)) {
+      ownedSkins = msg.ownedSkins;
+    }
+    skinPurchasePending = null;
+    renderSkinsGrid();
+    if (msg.type === "skin_purchased") {
+      toast("Скин куплен и применён!");
+      impact("medium");
+    }
     return;
   }
 
@@ -447,6 +509,15 @@ function handleMessage(msg) {
     remoteHovers = { ...(state.hovers || {}) };
     clearHoverCell(true);
 
+    // Sync skin from state (may include ownedSkins on first state after purchase)
+    if (state.activeSkin && state.activeSkin !== activeSkinId) {
+      activeSkinId = state.activeSkin;
+      applySkin(activeSkinId);
+    }
+    if (Array.isArray(state.ownedSkins) && state.ownedSkins.length > ownedSkins.length) {
+      ownedSkins = state.ownedSkins;
+    }
+
     if (state.gameId !== prevGameId) {
       modalScale = defaultZoomForState(state);
       modalOffsetX = 0;
@@ -475,23 +546,36 @@ function handleMessage(msg) {
   if (msg.type === "invoice_link") {
     if (!msg.url) {
       revivePending = false;
+      skinPurchasePending = null;
       if (els.reviveBtn) els.reviveBtn.disabled = false;
+      renderSkinsGrid();
       toast("Ошибка создания платежа");
       return;
     }
     tg?.openInvoice?.(msg.url, (status) => {
-      revivePending = false;
-      if (status !== "paid") {
-        if (els.reviveBtn) els.reviveBtn.disabled = false;
+      if (msg.skinId) {
+        // Skin purchase flow
+        if (status !== "paid") {
+          skinPurchasePending = null;
+          renderSkinsGrid();
+        }
+        // If "paid" — wait for server skin_purchased message
+      } else {
+        // Revive flow
+        revivePending = false;
+        if (status !== "paid") {
+          if (els.reviveBtn) els.reviveBtn.disabled = false;
+        }
       }
-      // If "paid" — wait for server to broadcast the revived state
     });
     return;
   }
 
   if (msg.type === "error") {
     revivePending = false;
+    skinPurchasePending = null;
     if (els.reviveBtn) els.reviveBtn.disabled = false;
+    renderSkinsGrid();
     toast(msg.message || "Ошибка");
     setBadge("ERROR", "danger");
     setStatus(msg.message || "Ошибка");
@@ -617,10 +701,14 @@ function renderPlayers() {
     if (player.id === state.you?.id) div.classList.add("me");
     if (state.over && state.winnerId && player.id === state.winnerId) div.classList.add("winner");
 
+    const skinId = player.skinId || "default";
     div.innerHTML = `
       <div class="player-row">
         <div class="player-main">
-          <div class="player-name">${escapeHtml(player.name)}</div>
+          <div class="player-name" style="display:flex;align-items:center;gap:6px;">
+            <span class="player-skin-dot" data-skin="${escapeHtml(skinId)}"></span>
+            ${escapeHtml(player.name)}
+          </div>
           <div class="player-meta">${player.id === state.you?.id ? "Вы" : "Игрок"}</div>
         </div>
         <div class="player-score">${player.score ?? 0}</div>
@@ -1157,8 +1245,10 @@ function updateTopCounters() {
 
 function computeElapsedSec(gameState) {
   if (!gameState?.startedAt) return 0;
-  const nowSec = Math.floor(Date.now() / 1000);
-  return Math.max(0, nowSec - Number(gameState.startedAt));
+  const endSec = (gameState.over && gameState.endedAt)
+    ? Number(gameState.endedAt)
+    : Math.floor(Date.now() / 1000);
+  return Math.max(0, endSec - Number(gameState.startedAt));
 }
 
 function formatDuration(totalSec) {
@@ -1471,6 +1561,98 @@ async function setBan(userId, banned) {
   } catch (e) {
     toast(e.message || "Ошибка");
   }
+}
+
+function applySkin(skinId) {
+  if (!skinId || skinId === "default") {
+    document.documentElement.removeAttribute("data-skin");
+  } else {
+    document.documentElement.setAttribute("data-skin", skinId);
+  }
+}
+
+function openSkinsModal() {
+  renderSkinsGrid();
+  els.skinsModal.classList.remove("hidden");
+  impact("light");
+}
+
+function closeSkinsModal() {
+  els.skinsModal.classList.add("hidden");
+}
+
+function renderSkinsGrid() {
+  els.skinsGrid.innerHTML = "";
+  SKIN_CATALOG.forEach((skin) => {
+    const isOwned = skin.price === 0 || ownedSkins.includes(skin.id);
+    const isActive = activeSkinId === skin.id;
+    const isPending = skinPurchasePending === skin.id;
+
+    const card = document.createElement("div");
+    card.className = "skin-card";
+    if (isActive) card.classList.add(skin.activeClass);
+
+    // Mini board preview
+    const preview = document.createElement("div");
+    preview.className = `skin-preview ${skin.previewClass}`;
+    skin.cells.forEach((cls) => {
+      const cell = document.createElement("div");
+      cell.className = "skin-preview-cell" + (cls ? " " + cls : "");
+      preview.appendChild(cell);
+    });
+
+    // Badge
+    let badgeHtml = "";
+    if (isActive) {
+      badgeHtml = `<div class="skin-badge skin-badge-owned">Активен</div>`;
+    } else if (isOwned) {
+      badgeHtml = `<div class="skin-badge skin-badge-owned">Применить</div>`;
+    } else if (isPending) {
+      badgeHtml = `<div class="skin-badge skin-badge-price">Покупка...</div>`;
+    } else {
+      badgeHtml = `<div class="skin-badge skin-badge-price">⭐ ${skin.price}</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="skin-name">${escapeHtml(skin.name)}</div>
+      ${badgeHtml}
+    `;
+    card.insertBefore(preview, card.firstChild);
+
+    if (isActive) {
+      const check = document.createElement("div");
+      check.className = "skin-active-check";
+      check.textContent = "✓";
+      card.appendChild(check);
+    }
+
+    card.addEventListener("click", () => {
+      if (isActive) return;
+      if (isOwned) {
+        selectSkin(skin.id);
+      } else if (!isPending) {
+        buySkin(skin.id);
+      }
+    });
+
+    els.skinsGrid.appendChild(card);
+  });
+}
+
+function selectSkin(skinId) {
+  activeSkinId = skinId;
+  applySkin(skinId);
+  send({ type: "select_skin", skinId });
+  renderSkinsGrid();
+  impact("light");
+}
+
+function buySkin(skinId) {
+  if (skinPurchasePending) return;
+  skinPurchasePending = skinId;
+  renderSkinsGrid();
+  send({ type: "skin_purchase_request", skinId });
+  impact("medium");
 }
 
 function clamp(v, min, max) {

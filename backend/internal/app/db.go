@@ -72,6 +72,18 @@ create table if not exists banned_users (
   banned_by text not null default '',
   banned_at timestamptz not null default now()
 );
+
+create table if not exists user_skins (
+  user_id text not null references users(id) on delete cascade,
+  skin_id text not null,
+  purchased_at timestamptz not null default now(),
+  primary key (user_id, skin_id)
+);
+
+create table if not exists user_active_skin (
+  user_id text primary key references users(id) on delete cascade,
+  skin_id text not null
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -146,6 +158,58 @@ func (s *Server) kickUser(userID string) {
 		close(client.Send)
 		_ = client.Conn.Close()
 	}
+}
+
+func (s *Server) getUserActiveSkin(ctx context.Context, userID string) string {
+	var skinID string
+	err := s.db.QueryRow(ctx,
+		`select skin_id from user_active_skin where user_id = $1`,
+		userID,
+	).Scan(&skinID)
+	if err != nil {
+		return "default"
+	}
+	return skinID
+}
+
+func (s *Server) getUserOwnedSkins(ctx context.Context, userID string) []string {
+	rows, err := s.db.Query(ctx,
+		`select skin_id from user_skins where user_id = $1 order by purchased_at`,
+		userID,
+	)
+	if err != nil {
+		return []string{"default"}
+	}
+	defer rows.Close()
+
+	skins := []string{"default"}
+	for rows.Next() {
+		var skinID string
+		if err := rows.Scan(&skinID); err == nil && skinID != "default" {
+			skins = append(skins, skinID)
+		}
+	}
+	return skins
+}
+
+func (s *Server) purchaseSkinDB(ctx context.Context, userID, skinID string) error {
+	_, err := s.db.Exec(ctx,
+		`insert into user_skins (user_id, skin_id) values ($1, $2) on conflict do nothing`,
+		userID, skinID,
+	)
+	if err != nil {
+		return err
+	}
+	return s.setActiveSkinDB(ctx, userID, skinID)
+}
+
+func (s *Server) setActiveSkinDB(ctx context.Context, userID, skinID string) error {
+	_, err := s.db.Exec(ctx,
+		`insert into user_active_skin (user_id, skin_id) values ($1, $2)
+         on conflict (user_id) do update set skin_id = excluded.skin_id`,
+		userID, skinID,
+	)
+	return err
 }
 
 func (s *Server) recordMove(matchID, userID, action string, cellsOpened int) {

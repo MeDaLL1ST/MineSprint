@@ -213,6 +213,7 @@
           </div>
           <div class="field-actions">
             <button id="openFieldBtn" class="ghost-btn">Открыть поле</button>
+            <button id="openSkinsBtn" class="ghost-btn">🎨 Дизайн</button>
           </div>
         </div>
 
@@ -290,6 +291,16 @@
     </div>
 
     <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <div id="skinsModal" class="skins-modal hidden">
+    <div class="skins-modal-card">
+      <div class="skins-modal-header">
+        <div class="skins-modal-title">Дизайн поля</div>
+        <button id="closeSkinsBtn" class="ghost-btn">Закрыть</button>
+      </div>
+      <div id="skinsGrid" class="skins-grid"></div>
+    </div>
   </div>
 
   <script src="./app.js"></script>

@@ -22,7 +22,7 @@ func (s *Server) startSolo(c *Client, rows, cols, mines int) {
 
 	s.leaveCurrentGameLocked(c.ID)
 
-	game := newGame("solo", rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name})
+	game := newGame("solo", rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name}, map[string]string{c.ID: c.ActiveSkin})
 	s.games[game.ID] = game
 	s.playerGame[c.ID] = game.ID
 	s.sendStateLocked(c, game)
@@ -46,7 +46,7 @@ func (s *Server) createRoom(c *Client, mode string, rows, cols, mines int) {
 
 	code := s.generateRoomCodeLocked()
 
-	game := newGame(mode, rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name})
+	game := newGame(mode, rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name}, map[string]string{c.ID: c.ActiveSkin})
 	game.RoomCode = code
 	game.OwnerID = c.ID
 
@@ -114,7 +114,17 @@ func (s *Server) joinRoom(c *Client, code string) {
 		if game.Hovers == nil {
 			game.Hovers = map[string]int{}
 		}
+		if game.Skins == nil {
+			game.Skins = map[string]string{}
+		}
+		game.Skins[c.ID] = c.ActiveSkin
 		s.playerGame[c.ID] = game.ID
+	} else {
+		// Player rejoining — refresh their skin
+		if game.Skins == nil {
+			game.Skins = map[string]string{}
+		}
+		game.Skins[c.ID] = c.ActiveSkin
 	}
 
 	if len(game.Players) == 1 || game.OwnerID == "" || !contains(game.Players, game.OwnerID) {
@@ -171,15 +181,19 @@ func (s *Server) restartRoom(c *Client) {
 	// Read old game's immutable-after-start fields under game.mu.
 	game.mu.Lock()
 	names := make(map[string]string, len(game.Players))
+	oldSkins := make(map[string]string, len(game.Players))
 	for _, pid := range game.Players {
 		names[pid] = game.Names[pid]
+		if game.Skins != nil {
+			oldSkins[pid] = game.Skins[pid]
+		}
 	}
 	players := append([]string{}, game.Players...)
 	mode, rows, cols, mines := game.Mode, game.Rows, game.Cols, game.Mines
 	roomCode, ownerID, oldID := game.RoomCode, game.OwnerID, game.ID
 	game.mu.Unlock()
 
-	next := newGame(mode, rows, cols, mines, players, names)
+	next := newGame(mode, rows, cols, mines, players, names, oldSkins)
 	next.RoomCode = roomCode
 	next.OwnerID = ownerID
 
@@ -513,10 +527,15 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 
 	players := make([]PlayerBrief, 0, len(g.Players))
 	for _, pid := range g.Players {
+		skin := ""
+		if g.Skins != nil {
+			skin = g.Skins[pid]
+		}
 		players = append(players, PlayerBrief{
-			ID:    pid,
-			Name:  g.Names[pid],
-			Score: g.Scores[pid],
+			ID:     pid,
+			Name:   g.Names[pid],
+			Score:  g.Scores[pid],
+			SkinID: skin,
 		})
 	}
 	sort.SliceStable(players, func(i, j int) bool {
@@ -559,6 +578,11 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		}
 	}
 
+	mySkin := ""
+	if g.Skins != nil {
+		mySkin = g.Skins[playerID]
+	}
+
 	return State{
 		GameID:     g.ID,
 		RoomCode:   g.RoomCode,
@@ -577,17 +601,25 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		WinnerID:   g.WinnerID,
 		WinnerName: winnerName,
 		StartedAt:  g.StartedAt.Unix(),
+		EndedAt:    func() int64 {
+			if g.Over && !g.EndedAt.IsZero() {
+				return g.EndedAt.Unix()
+			}
+			return 0
+		}(),
 		You: PlayerBrief{
-			ID:    playerID,
-			Name:  g.Names[playerID],
-			Score: g.Scores[playerID],
+			ID:     playerID,
+			Name:   g.Names[playerID],
+			Score:  g.Scores[playerID],
+			SkinID: mySkin,
 		},
-		Players:   players,
-		Hovers:    hovers,
-		Status:    statusText(g, playerID),
-		Board:     board,
-		EndReason: g.EndReason,
-		CanRevive: canRevive,
+		Players:    players,
+		Hovers:     hovers,
+		Status:     statusText(g, playerID),
+		Board:      board,
+		EndReason:  g.EndReason,
+		CanRevive:  canRevive,
+		ActiveSkin: mySkin,
 	}
 }
 
@@ -688,12 +720,18 @@ func validateConfig(rows, cols, mines int) error {
 	return nil
 }
 
-func newGame(mode string, rows, cols, mines int, players []string, names map[string]string) *Game {
+func newGame(mode string, rows, cols, mines int, players []string, names map[string]string, skins map[string]string) *Game {
 	scores := map[string]int{}
 	playerNames := map[string]string{}
+	gameSkins := map[string]string{}
 	for _, pid := range players {
 		scores[pid] = 0
 		playerNames[pid] = names[pid]
+		if skins != nil {
+			if s, ok := skins[pid]; ok {
+				gameSkins[pid] = s
+			}
+		}
 	}
 
 	return &Game{
@@ -707,6 +745,7 @@ func newGame(mode string, rows, cols, mines int, players []string, names map[str
 		Names:      playerNames,
 		Scores:     scores,
 		Hovers:     map[string]int{},
+		Skins:      gameSkins,
 		StartedAt:  time.Now(),
 		LastAction: time.Now(),
 	}

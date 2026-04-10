@@ -58,7 +58,7 @@ func main() {
 		// Handle Stars pre-checkout: approve immediately
 		if update.PreCheckoutQuery != nil {
 			pq := update.PreCheckoutQuery
-			if strings.HasPrefix(pq.InvoicePayload, "revive:") {
+			if strings.HasPrefix(pq.InvoicePayload, "revive:") || strings.HasPrefix(pq.InvoicePayload, "skin:") {
 				_, _ = bot.Request(tgbotapi.PreCheckoutConfig{
 					PreCheckoutQueryID: pq.ID,
 					OK:                 true,
@@ -74,10 +74,15 @@ func main() {
 		// Handle successful Stars payment
 		if update.Message.SuccessfulPayment != nil {
 			sp := update.Message.SuccessfulPayment
+			playerID := fmt.Sprintf("%d", update.Message.From.ID)
 			if strings.HasPrefix(sp.InvoicePayload, "revive:") {
-				playerID := fmt.Sprintf("%d", update.Message.From.ID)
 				if err := notifyRevive(cfg, playerID); err != nil {
 					log.Printf("revive notify error for player %s: %v", playerID, err)
+				}
+			} else if strings.HasPrefix(sp.InvoicePayload, "skin:") {
+				skinID := strings.TrimPrefix(sp.InvoicePayload, "skin:")
+				if err := notifySkinPurchase(cfg, playerID, skinID); err != nil {
+					log.Printf("skin purchase notify error for player %s skin %s: %v", playerID, skinID, err)
 				}
 			}
 			continue
@@ -97,6 +102,27 @@ func main() {
 			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "")
 		}
 	}
+}
+
+func notifySkinPurchase(cfg app.Config, playerID, skinID string) error {
+	body, _ := json.Marshal(map[string]string{
+		"secret":   cfg.InternalSecret,
+		"playerId": playerID,
+		"skinId":   skinID,
+	})
+	resp, err := http.Post(
+		cfg.InternalServerURL+"/api/internal/purchase_skin",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func notifyRevive(cfg app.Config, playerID string) error {

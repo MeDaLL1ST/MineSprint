@@ -15,6 +15,7 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/admin/ban", s.handleAdminBan)
 	mux.HandleFunc("/api/admin/unban", s.handleAdminUnban)
 	mux.HandleFunc("/api/internal/revive", s.handleInternalRevive)
+	mux.HandleFunc("/api/internal/purchase_skin", s.handleInternalPurchaseSkin)
 	mux.HandleFunc("/ws", s.handleWS)
 	return mux
 }
@@ -424,6 +425,42 @@ func (s *Server) handleInternalRevive(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.revivePlayer(req.PlayerID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleInternalPurchaseSkin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Secret   string `json:"secret"`
+		PlayerID string `json:"playerId"`
+		SkinID   string `json:"skinId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad request"})
+		return
+	}
+
+	if req.Secret != s.cfg.InternalSecret {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+
+	req.PlayerID = strings.TrimSpace(req.PlayerID)
+	req.SkinID = strings.TrimSpace(req.SkinID)
+	if req.PlayerID == "" || req.SkinID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "playerId and skinId are required"})
+		return
+	}
+
+	if err := s.purchaseSkinForPlayer(req.PlayerID, req.SkinID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
 
