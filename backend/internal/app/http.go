@@ -17,6 +17,7 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/admin/unban", s.handleAdminUnban)
 	mux.HandleFunc("/api/internal/revive", s.handleInternalRevive)
 	mux.HandleFunc("/api/internal/purchase_skin", s.handleInternalPurchaseSkin)
+	mux.HandleFunc("/api/internal/purchase_shape", s.handleInternalPurchaseShape)
 	mux.HandleFunc("/api/internal/subscribe", s.handleInternalSubscribe)
 	mux.HandleFunc("/api/admin/grant-skin", s.handleAdminGrantSkin)
 	mux.HandleFunc("/api/admin/revoke-skin", s.handleAdminRevokeSkin)
@@ -512,6 +513,43 @@ func (s *Server) handleInternalPurchaseSkin(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.recordPurchase(req.PlayerID, "skin", req.SkinID, 49)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleInternalPurchaseShape(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Secret   string `json:"secret"`
+		PlayerID string `json:"playerId"`
+		ShapeID  string `json:"shapeId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad request"})
+		return
+	}
+
+	if subtle.ConstantTimeCompare([]byte(req.Secret), []byte(s.cfg.InternalSecret)) != 1 {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+
+	req.PlayerID = strings.TrimSpace(req.PlayerID)
+	req.ShapeID = strings.TrimSpace(req.ShapeID)
+	if req.PlayerID == "" || req.ShapeID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "playerId and shapeId are required"})
+		return
+	}
+
+	if err := s.purchaseShapeForPlayer(req.PlayerID, req.ShapeID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	s.recordPurchase(req.PlayerID, "shape", req.ShapeID, 79)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

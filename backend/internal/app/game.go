@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -36,8 +37,19 @@ func (s *Server) maxFieldSize(c *Client) int {
 	return 30
 }
 
-func (s *Server) startSolo(c *Client, rows, cols, mines int) {
-	if err := validateConfig(rows, cols, mines, s.maxFieldSize(c)); err != nil {
+func (s *Server) startSolo(c *Client, rows, cols, mines int, shape string) {
+	if shape == "" {
+		shape = "square"
+	}
+	if !validShapeIDs[shape] {
+		s.sendError(c, "Неизвестная форма карты")
+		return
+	}
+	if !s.canUseShape(c, shape) {
+		s.sendError(c, "Эта форма не куплена. Приобретите её или оформите Pro подписку (⭐ 259/мес)")
+		return
+	}
+	if err := validateConfig(rows, cols, mines, s.maxFieldSize(c), shape); err != nil {
 		s.sendError(c, err.Error())
 		return
 	}
@@ -47,19 +59,30 @@ func (s *Server) startSolo(c *Client, rows, cols, mines int) {
 
 	s.leaveCurrentGameLocked(c.ID)
 
-	game := newGame("solo", rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name}, map[string]string{c.ID: c.ActiveSkin})
+	game := newGame("solo", shape, rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name}, map[string]string{c.ID: c.ActiveSkin})
 	s.games[game.ID] = game
 	s.playerGame[c.ID] = game.ID
 	s.sendStateLocked(c, game)
 }
 
-func (s *Server) createRoom(c *Client, mode string, rows, cols, mines int) {
+func (s *Server) createRoom(c *Client, mode string, rows, cols, mines int, shape string) {
 	mode = normalizeMode(mode)
 	if mode != "coop" && mode != "versus" {
 		s.sendError(c, "Для комнаты доступны только coop и versus")
 		return
 	}
-	if err := validateConfig(rows, cols, mines, s.maxFieldSize(c)); err != nil {
+	if shape == "" {
+		shape = "square"
+	}
+	if !validShapeIDs[shape] {
+		s.sendError(c, "Неизвестная форма карты")
+		return
+	}
+	if !s.canUseShape(c, shape) {
+		s.sendError(c, "Эта форма не куплена. Приобретите её или оформите Pro подписку (⭐ 259/мес)")
+		return
+	}
+	if err := validateConfig(rows, cols, mines, s.maxFieldSize(c), shape); err != nil {
 		s.sendError(c, err.Error())
 		return
 	}
@@ -71,7 +94,7 @@ func (s *Server) createRoom(c *Client, mode string, rows, cols, mines int) {
 
 	code := s.generateRoomCodeLocked()
 
-	game := newGame(mode, rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name}, map[string]string{c.ID: c.ActiveSkin})
+	game := newGame(mode, shape, rows, cols, mines, []string{c.ID}, map[string]string{c.ID: c.Name}, map[string]string{c.ID: c.ActiveSkin})
 	game.RoomCode = code
 	game.OwnerID = c.ID
 
@@ -196,7 +219,7 @@ func (s *Server) leaveRoom(c *Client) {
 	})
 }
 
-func (s *Server) restartRoom(c *Client, newRows, newCols, newMines int) {
+func (s *Server) restartRoom(c *Client, newRows, newCols, newMines int, newShape string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -223,20 +246,31 @@ func (s *Server) restartRoom(c *Client, newRows, newCols, newMines int) {
 		}
 	}
 	players := append([]string{}, game.Players...)
-	mode, rows, cols, mines := game.Mode, game.Rows, game.Cols, game.Mines
+	mode, rows, cols, mines, shape := game.Mode, game.Rows, game.Cols, game.Mines, game.Shape
 	roomCode, ownerID, oldID := game.RoomCode, game.OwnerID, game.ID
 	game.mu.Unlock()
 
 	// If the caller is the room owner and provides a new valid config, apply it.
 	if c.ID == ownerID && newRows > 0 && newCols > 0 && newMines > 0 {
-		if err := validateConfig(newRows, newCols, newMines, s.maxFieldSize(c)); err != nil {
+		if newShape != "" {
+			if !validShapeIDs[newShape] {
+				s.sendError(c, "Неизвестная форма карты")
+				return
+			}
+			if !s.canUseShape(c, newShape) {
+				s.sendError(c, "Эта форма не куплена. Приобретите её или оформите Pro подписку (⭐ 259/мес)")
+				return
+			}
+			shape = newShape
+		}
+		if err := validateConfig(newRows, newCols, newMines, s.maxFieldSize(c), shape); err != nil {
 			s.sendError(c, err.Error())
 			return
 		}
 		rows, cols, mines = newRows, newCols, newMines
 	}
 
-	next := newGame(mode, rows, cols, mines, players, names, oldSkins)
+	next := newGame(mode, shape, rows, cols, mines, players, names, oldSkins)
 	next.RoomCode = roomCode
 	next.OwnerID = ownerID
 
@@ -277,7 +311,7 @@ func (s *Server) revealCell(c *Client, idx int) {
 	}
 
 	cell := &game.Board[idx]
-	if cell.Opened || cell.Flagged {
+	if cell.Opened || cell.Flagged || cell.Inactive {
 		game.mu.Unlock()
 		return
 	}
@@ -313,7 +347,7 @@ func (s *Server) revealCell(c *Client, idx int) {
 	game.OpenedSafe += openedCount
 	game.Scores[c.ID] += openedCount
 
-	if game.OpenedSafe == len(game.Board)-game.Mines {
+	if game.OpenedSafe == game.TotalSafe {
 		game.Over = true
 		game.EndedAt = time.Now()
 		game.EndReason = "clear"
@@ -399,7 +433,7 @@ func (s *Server) toggleFlag(c *Client, idx int) {
 	matchID := game.ID
 
 	cell := &game.Board[idx]
-	if cell.Opened {
+	if cell.Opened || cell.Inactive {
 		game.mu.Unlock()
 		return
 	}
@@ -557,6 +591,7 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 			I: i,
 			O: cell.Opened,
 			F: cell.Flagged,
+			D: cell.Inactive,
 		}
 		if cell.Opened {
 			cc.A = cell.Adj
@@ -635,6 +670,7 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		InviteLink: s.buildInviteLink(g.RoomCode),
 		ShareLink:  s.buildShareLink(g.RoomCode),
 		Mode:       g.Mode,
+		Shape:      g.Shape,
 		Online:     g.Mode != "solo",
 		OwnerID:    g.OwnerID,
 		Rows:       g.Rows,
@@ -752,7 +788,7 @@ func normalizeMode(mode string) string {
 	}
 }
 
-func validateConfig(rows, cols, mines, maxSize int) error {
+func validateConfig(rows, cols, mines, maxSize int, shape string) error {
 	if rows < 5 || rows > maxSize {
 		return fmt.Errorf("rows: допустимо от 5 до %d", maxSize)
 	}
@@ -760,13 +796,147 @@ func validateConfig(rows, cols, mines, maxSize int) error {
 		return fmt.Errorf("cols: допустимо от 5 до %d", maxSize)
 	}
 	maxMines := rows*cols - 1
+	if shape != "" && shape != "square" {
+		active := countActiveCells(shape, rows, cols)
+		if active < 2 {
+			return fmt.Errorf("форма слишком мала для заданного размера поля")
+		}
+		maxMines = active - 1
+	}
 	if mines < 1 || mines > maxMines {
 		return fmt.Errorf("mines: допустимо от 1 до %d", maxMines)
 	}
 	return nil
 }
 
-func newGame(mode string, rows, cols, mines int, players []string, names map[string]string, skins map[string]string) *Game {
+// getShapeMask returns a boolean slice of length rows*cols where true = active (playable) cell.
+func getShapeMask(shape string, rows, cols int) []bool {
+	total := rows * cols
+	mask := make([]bool, total)
+	switch shape {
+	case "", "square":
+		for i := range mask {
+			mask[i] = true
+		}
+	case "circle":
+		cr := float64(rows-1) / 2.0
+		cc := float64(cols-1) / 2.0
+		rr := math.Min(cr, cc)
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				dr := float64(row) - cr
+				dc := float64(col) - cc
+				if rr > 0 && dr*dr/(rr*rr)+dc*dc/(rr*rr) <= 1.0 {
+					mask[row*cols+col] = true
+				}
+			}
+		}
+	case "diamond":
+		cr := float64(rows-1) / 2.0
+		cc := float64(cols-1) / 2.0
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				var dr, dc float64
+				if cr > 0 {
+					dr = math.Abs(float64(row)-cr) / cr
+				}
+				if cc > 0 {
+					dc = math.Abs(float64(col)-cc) / cc
+				}
+				if dr+dc <= 1.0 {
+					mask[row*cols+col] = true
+				}
+			}
+		}
+	case "cross":
+		midRow := rows / 2
+		midCol := cols / 2
+		halfW := max(1, min(rows, cols)/6)
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				inRow := abs(row-midRow) <= halfW
+				inCol := abs(col-midCol) <= halfW
+				mask[row*cols+col] = inRow || inCol
+			}
+		}
+	case "x_shape":
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				thickness := math.Max(float64(min(rows, cols))/8.0, 1.5)
+				var d1, d2 float64
+				if rows > 1 {
+					ratio := float64(row) / float64(rows-1)
+					d1 = math.Abs(float64(col) - ratio*float64(cols-1))
+					d2 = math.Abs(float64(col) - (1.0-ratio)*float64(cols-1))
+				}
+				mask[row*cols+col] = d1 <= thickness || d2 <= thickness
+			}
+		}
+	case "frame_x":
+		for row := 0; row < rows; row++ {
+			for col := 0; col < cols; col++ {
+				isBorder := row == 0 || row == rows-1 || col == 0 || col == cols-1
+				var isX bool
+				if rows > 1 {
+					thickness := math.Max(float64(min(rows, cols))/8.0, 1.5)
+					ratio := float64(row) / float64(rows-1)
+					d1 := math.Abs(float64(col) - ratio*float64(cols-1))
+					d2 := math.Abs(float64(col) - (1.0-ratio)*float64(cols-1))
+					isX = d1 <= thickness || d2 <= thickness
+				}
+				mask[row*cols+col] = isBorder || isX
+			}
+		}
+	}
+	return mask
+}
+
+func countActiveCells(shape string, rows, cols int) int {
+	mask := getShapeMask(shape, rows, cols)
+	n := 0
+	for _, active := range mask {
+		if active {
+			n++
+		}
+	}
+	return n
+}
+
+var validShapeIDs = map[string]bool{
+	"square":  true,
+	"circle":  true,
+	"diamond": true,
+	"cross":   true,
+	"x_shape": true,
+	"frame_x": true,
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func (s *Server) canUseShape(c *Client, shapeID string) bool {
+	if shapeID == "" || shapeID == "square" {
+		return true
+	}
+	if c.ID == s.cfg.AdminTGID || c.IsPrivileged || c.HasSubscription {
+		return true
+	}
+	for _, owned := range c.OwnedShapes {
+		if owned == shapeID {
+			return true
+		}
+	}
+	return false
+}
+
+func newGame(mode, shape string, rows, cols, mines int, players []string, names map[string]string, skins map[string]string) *Game {
+	if shape == "" {
+		shape = "square"
+	}
 	scores := map[string]int{}
 	playerNames := map[string]string{}
 	gameSkins := map[string]string{}
@@ -780,13 +950,30 @@ func newGame(mode string, rows, cols, mines int, players []string, names map[str
 		}
 	}
 
+	board := make([]Cell, rows*cols)
+	mask := getShapeMask(shape, rows, cols)
+	activeCount := 0
+	for i, active := range mask {
+		if !active {
+			board[i].Inactive = true
+		} else {
+			activeCount++
+		}
+	}
+	totalSafe := activeCount - mines
+	if totalSafe < 0 {
+		totalSafe = 0
+	}
+
 	return &Game{
 		ID:         uuid.NewString(),
 		Mode:       mode,
+		Shape:      shape,
 		Rows:       rows,
 		Cols:       cols,
 		Mines:      mines,
-		Board:      make([]Cell, rows*cols),
+		Board:      board,
+		TotalSafe:  totalSafe,
 		Players:    append([]string{}, players...),
 		Names:      playerNames,
 		Scores:     scores,
@@ -815,7 +1002,7 @@ func generateBoard(g *Game, safeIdx int) {
 	total := len(g.Board)
 	candidates := make([]int, 0, total-1)
 	for i := 0; i < total; i++ {
-		if i != safeIdx {
+		if i != safeIdx && !g.Board[i].Inactive {
 			candidates = append(candidates, i)
 		}
 	}
@@ -829,7 +1016,7 @@ func generateBoard(g *Game, safeIdx int) {
 	}
 
 	for i := range g.Board {
-		if g.Board[i].Mine {
+		if g.Board[i].Mine || g.Board[i].Inactive {
 			continue
 		}
 		count := 0
@@ -867,7 +1054,7 @@ func floodOpen(g *Game, start int, playerID string) int {
 	if start < 0 || start >= len(g.Board) {
 		return 0
 	}
-	if g.Board[start].Opened || g.Board[start].Flagged || g.Board[start].Mine {
+	if g.Board[start].Opened || g.Board[start].Flagged || g.Board[start].Mine || g.Board[start].Inactive {
 		return 0
 	}
 
@@ -880,7 +1067,7 @@ func floodOpen(g *Game, start int, playerID string) int {
 		queue = queue[1:]
 
 		cell := &g.Board[idx]
-		if cell.Opened || cell.Flagged || cell.Mine {
+		if cell.Opened || cell.Flagged || cell.Mine || cell.Inactive {
 			continue
 		}
 
@@ -897,7 +1084,7 @@ func floodOpen(g *Game, start int, playerID string) int {
 				continue
 			}
 			nc := &g.Board[nb]
-			if nc.Opened || nc.Flagged || nc.Mine {
+			if nc.Opened || nc.Flagged || nc.Mine || nc.Inactive {
 				continue
 			}
 			seen[nb] = true

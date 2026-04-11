@@ -15,6 +15,7 @@ type Client struct {
 	Send            chan []byte
 	ActiveSkin      string
 	OwnedSkins      []string
+	OwnedShapes     []string
 	HasSubscription bool
 	IsPrivileged    bool
 }
@@ -23,6 +24,7 @@ type Cell struct {
 	Mine     bool
 	Opened   bool
 	Flagged  bool
+	Inactive bool
 	Adj      int
 	OpenedBy string
 }
@@ -31,11 +33,13 @@ type Game struct {
 	mu             sync.Mutex // protects all mutable Game fields
 	ID             string
 	Mode           string
+	Shape          string
 	Rows           int
 	Cols           int
 	Mines          int
 	Board          []Cell
 	Generated      bool
+	TotalSafe      int // active non-mine cells; equals len(Board)-Mines for square shape
 	Players        []string
 	Names          map[string]string
 	Scores         map[string]int
@@ -64,14 +68,16 @@ type Room struct {
 }
 
 type Action struct {
-	Type   string `json:"type"`
-	Mode   string `json:"mode,omitempty"`
-	Code   string `json:"code,omitempty"`
-	Rows   int    `json:"rows,omitempty"`
-	Cols   int    `json:"cols,omitempty"`
-	Mines  int    `json:"mines,omitempty"`
-	Cell   int    `json:"cell,omitempty"`
-	SkinID string `json:"skinId,omitempty"`
+	Type    string `json:"type"`
+	Mode    string `json:"mode,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Rows    int    `json:"rows,omitempty"`
+	Cols    int    `json:"cols,omitempty"`
+	Mines   int    `json:"mines,omitempty"`
+	Cell    int    `json:"cell,omitempty"`
+	SkinID  string `json:"skinId,omitempty"`
+	Shape   string `json:"shape,omitempty"`
+	ShapeID string `json:"shapeId,omitempty"`
 }
 
 type ClientCell struct {
@@ -81,6 +87,7 @@ type ClientCell struct {
 	M  bool   `json:"m,omitempty"`
 	A  int    `json:"a,omitempty"`
 	By string `json:"by,omitempty"`
+	D  bool   `json:"d,omitempty"` // disabled/inactive (outside shape boundary)
 }
 
 type PlayerBrief struct {
@@ -96,6 +103,7 @@ type State struct {
 	InviteLink string         `json:"inviteLink,omitempty"`
 	ShareLink  string         `json:"shareLink,omitempty"`
 	Mode       string         `json:"mode"`
+	Shape      string         `json:"shape,omitempty"`
 	Online     bool           `json:"online"`
 	OwnerID    string         `json:"ownerId,omitempty"`
 	Rows       int            `json:"rows"`

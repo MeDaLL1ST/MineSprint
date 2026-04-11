@@ -105,6 +105,13 @@ create table if not exists privileged_users (
   granted_by text not null,
   granted_at timestamptz not null default now()
 );
+
+create table if not exists user_shapes (
+  user_id text not null references users(id) on delete cascade,
+  shape_id text not null,
+  purchased_at timestamptz not null default now(),
+  primary key (user_id, shape_id)
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -296,11 +303,13 @@ func cloneGame(g *Game) *Game {
 	return &Game{
 		ID:           g.ID,
 		Mode:         g.Mode,
+		Shape:        g.Shape,
 		Rows:         g.Rows,
 		Cols:         g.Cols,
 		Mines:        g.Mines,
 		Board:        append([]Cell{}, g.Board...),
 		Generated:    g.Generated,
+		TotalSafe:    g.TotalSafe,
 		Players:      append([]string{}, g.Players...),
 		Names:        names,
 		Scores:       scores,
@@ -422,6 +431,34 @@ func (s *Server) revokeUserPrivilege(userID string) error {
 	_, err := s.db.Exec(context.Background(),
 		`delete from privileged_users where user_id = $1`,
 		userID,
+	)
+	return err
+}
+
+func (s *Server) getUserOwnedShapes(ctx context.Context, userID string) []string {
+	rows, err := s.db.Query(ctx,
+		`select shape_id from user_shapes where user_id = $1 order by purchased_at`,
+		userID,
+	)
+	if err != nil {
+		return []string{}
+	}
+	defer rows.Close()
+
+	shapes := []string{}
+	for rows.Next() {
+		var shapeID string
+		if err := rows.Scan(&shapeID); err == nil {
+			shapes = append(shapes, shapeID)
+		}
+	}
+	return shapes
+}
+
+func (s *Server) purchaseShapeDB(ctx context.Context, userID, shapeID string) error {
+	_, err := s.db.Exec(ctx,
+		`insert into user_shapes (user_id, shape_id) values ($1, $2) on conflict do nothing`,
+		userID, shapeID,
 	)
 	return err
 }

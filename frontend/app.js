@@ -8,6 +8,15 @@ tg?.setBackgroundColor?.("#0b1020");
 const ADMIN_TG_ID = "887152362";
 const LONG_PRESS_MS = 380;
 
+const SHAPE_CATALOG = [
+  { id: "square",  name: "Квадрат",        icon: "◼", price: 0  },
+  { id: "circle",  name: "Круг",           icon: "●", price: 79 },
+  { id: "diamond", name: "Ромб",           icon: "◆", price: 79 },
+  { id: "cross",   name: "Крест",          icon: "✚", price: 79 },
+  { id: "x_shape", name: "Икс",            icon: "✕", price: 79 },
+  { id: "frame_x", name: "Рамка с иксом",  icon: "⊠", price: 79 },
+];
+
 const SKIN_CATALOG = [
   {
     id: "default",
@@ -162,6 +171,9 @@ let frozenElapsedSec = 0;
 let activeSkinId = "default";
 let ownedSkins = ["default"];
 let skinPurchasePending = null; // skinId being purchased
+let selectedShape = "square";
+let ownedShapes = [];
+let shapePurchasePending = null; // shapeId being purchased
 let hasSubscription = false;
 let isPrivileged = false;
 let isAdmin = false;
@@ -265,6 +277,7 @@ function bindUI() {
       rows: getRows(),
       cols: getCols(),
       mines: getMines(),
+      shape: selectedShape,
     });
     impact("light");
   });
@@ -277,6 +290,7 @@ function bindUI() {
       rows: getRows(),
       cols: getCols(),
       mines: getMines(),
+      shape: selectedShape,
     });
     impact("medium");
   });
@@ -398,13 +412,14 @@ function toggleInputMode() {
 function restartCurrentGame() {
   indicateGameAction("Перезапускаем...");
   if (state?.online) {
-    send({ type: "restart_room", rows: getRows(), cols: getCols(), mines: getMines() });
+    send({ type: "restart_room", rows: getRows(), cols: getCols(), mines: getMines(), shape: selectedShape });
   } else {
     send({
       type: "start_solo",
       rows: state?.rows || getRows(),
       cols: state?.cols || getCols(),
       mines: state?.mines || getMines(),
+      shape: selectedShape,
     });
   }
   impact("light");
@@ -510,10 +525,14 @@ function handleMessage(msg) {
     if (Array.isArray(msg.ownedSkins)) {
       ownedSkins = msg.ownedSkins;
     }
+    if (Array.isArray(msg.ownedShapes)) {
+      ownedShapes = msg.ownedShapes;
+    }
     hasSubscription = !!msg.hasSubscription;
     isPrivileged = !!msg.isPrivileged;
     isAdmin = !!msg.isAdmin;
     renderProStatus();
+    renderShapeSelector();
     if (isAdmin) {
       els.adminSection.classList.remove("hidden");
       loadAdminStats();
@@ -542,6 +561,17 @@ function handleMessage(msg) {
     isPrivileged = false;
     renderProStatus();
     toast("Безлимитный доступ отозван.");
+    return;
+  }
+
+  if (msg.type === "shape_purchased") {
+    if (Array.isArray(msg.ownedShapes)) {
+      ownedShapes = msg.ownedShapes;
+    }
+    shapePurchasePending = null;
+    renderShapeSelector();
+    toast("Форма куплена!");
+    impact("medium");
     return;
   }
 
@@ -611,6 +641,7 @@ function handleMessage(msg) {
     const prevGameId = state?.gameId || "";
     state = msg.payload;
     selectedMode = state.mode || selectedMode;
+    if (state.shape) selectedShape = state.shape;
     remoteHovers = { ...(state.hovers || {}) };
     clearHoverCell(true);
 
@@ -660,7 +691,14 @@ function handleMessage(msg) {
       return;
     }
     tg?.openInvoice?.(msg.url, (status) => {
-      if (msg.skinId) {
+      if (msg.shapeId) {
+        // Shape purchase flow
+        if (status !== "paid") {
+          shapePurchasePending = null;
+          renderShapeSelector();
+        }
+        // If "paid" — wait for server shape_purchased message
+      } else if (msg.skinId) {
         // Skin purchase flow
         if (status !== "paid") {
           skinPurchasePending = null;
@@ -688,8 +726,10 @@ function handleMessage(msg) {
   if (msg.type === "error") {
     revivePending = false;
     skinPurchasePending = null;
+    shapePurchasePending = null;
     if (els.reviveBtn) els.reviveBtn.disabled = false;
     renderSkinsGrid();
+    renderShapeSelector();
     toast(msg.message || "Ошибка");
     setBadge("ERROR", "danger");
     setStatus(msg.message || "Ошибка");
@@ -731,6 +771,7 @@ function renderBase() {
   renderModeButtons();
   renderRoomControls();
   renderStats();
+  renderShapeSelector();
 }
 
 function render() {
@@ -913,6 +954,13 @@ function renderBoardTo(container, modal) {
     const btn = document.createElement("button");
     btn.className = "cell";
     btn.dataset.index = String(cell.i);
+
+    if (cell.d) {
+      btn.classList.add("cell-inactive");
+      btn.tabIndex = -1;
+      container.appendChild(btn);
+      return;
+    }
 
     if (cell.o) btn.classList.add("open");
     if (cell.f && !cell.o) btn.classList.add("flagged");
@@ -1990,6 +2038,47 @@ function renderSkinsGrid() {
 
     els.skinsGrid.appendChild(card);
   });
+}
+
+function renderShapeSelector() {
+  const container = document.getElementById("shapeSelector");
+  const hint = document.getElementById("shapePurchaseHint");
+  if (!container) return;
+
+  const hasAccess = isAdmin || isPrivileged || hasSubscription || user.id === ADMIN_TG_ID;
+  let anyLocked = false;
+
+  container.innerHTML = "";
+  SHAPE_CATALOG.forEach((shape) => {
+    const isOwned = shape.price === 0 || hasAccess || ownedShapes.includes(shape.id);
+    const isSelected = selectedShape === shape.id;
+    const isPending = shapePurchasePending === shape.id;
+
+    if (!isOwned) anyLocked = true;
+
+    const btn = document.createElement("button");
+    btn.className = "shape-btn" + (isSelected ? " shape-btn-active" : "") + (!isOwned ? " shape-btn-locked" : "");
+    btn.title = shape.name + (isOwned ? "" : ` — ⭐ ${shape.price}`);
+    btn.innerHTML = `<span class="shape-icon">${shape.icon}</span><span class="shape-name">${escapeHtml(shape.name)}</span>` +
+      (!isOwned ? `<span class="shape-lock">${isPending ? "…" : "⭐" + shape.price}</span>` : "");
+
+    btn.addEventListener("click", () => {
+      if (isOwned) {
+        selectedShape = shape.id;
+        renderShapeSelector();
+        impact("light");
+      } else if (!isPending) {
+        shapePurchasePending = shape.id;
+        renderShapeSelector();
+        send({ type: "shape_purchase_request", shapeId: shape.id });
+        impact("medium");
+      }
+    });
+
+    container.appendChild(btn);
+  });
+
+  if (hint) hint.classList.toggle("hidden", !anyLocked || hasAccess);
 }
 
 function selectSkin(skinId) {

@@ -58,6 +58,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		},
 		"activeSkin":      client.ActiveSkin,
 		"ownedSkins":      client.OwnedSkins,
+		"ownedShapes":     client.OwnedShapes,
 		"hasSubscription": client.HasSubscription,
 		"isPrivileged":    client.IsPrivileged,
 		"isAdmin":         client.ID == s.cfg.AdminTGID,
@@ -77,6 +78,7 @@ func (s *Server) registerClient(c *Client) {
 	ctx := context.Background()
 	c.ActiveSkin = s.getUserActiveSkin(ctx, c.ID)
 	c.OwnedSkins = s.getUserOwnedSkins(ctx, c.ID)
+	c.OwnedShapes = s.getUserOwnedShapes(ctx, c.ID)
 	c.HasSubscription = s.isUserSubscribed(ctx, c.ID)
 	c.IsPrivileged = s.isUserPrivileged(ctx, c.ID)
 
@@ -122,15 +124,15 @@ func (s *Server) writeLoop(c *Client) {
 func (s *Server) handleAction(c *Client, act Action) {
 	switch act.Type {
 	case "start_solo":
-		s.startSolo(c, act.Rows, act.Cols, act.Mines)
+		s.startSolo(c, act.Rows, act.Cols, act.Mines, act.Shape)
 	case "create_room":
-		s.createRoom(c, act.Mode, act.Rows, act.Cols, act.Mines)
+		s.createRoom(c, act.Mode, act.Rows, act.Cols, act.Mines, act.Shape)
 	case "join_room":
 		s.joinRoom(c, act.Code)
 	case "leave_room":
 		s.leaveRoom(c)
 	case "restart_room":
-		s.restartRoom(c, act.Rows, act.Cols, act.Mines)
+		s.restartRoom(c, act.Rows, act.Cols, act.Mines, act.Shape)
 	case "reveal":
 		s.revealCell(c, act.Cell)
 	case "toggle_flag":
@@ -145,6 +147,8 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.handleSelectSkin(c, act.SkinID)
 	case "subscribe_request":
 		s.handleSubscribeRequest(c)
+	case "shape_purchase_request":
+		s.handleShapePurchaseRequest(c, act.ShapeID)
 	default:
 		s.sendError(c, "Неизвестное действие")
 	}
@@ -368,6 +372,112 @@ func (s *Server) purchaseSkinForPlayer(playerID, skinID string) error {
 			"ownedSkins": c.OwnedSkins,
 		})
 	}
+	return nil
+}
+
+var shapeNames = map[string]string{
+	"circle":  "Круг",
+	"diamond": "Ромб",
+	"cross":   "Крест",
+	"x_shape": "Икс",
+	"frame_x": "Рамка с иксом",
+}
+
+func (s *Server) handleShapePurchaseRequest(c *Client, shapeID string) {
+	if shapeID == "" || shapeID == "square" {
+		s.sendError(c, "Эта форма бесплатна")
+		return
+	}
+	if !validShapeIDs[shapeID] {
+		s.sendError(c, "Неизвестная форма карты")
+		return
+	}
+	// Subscription/privilege already unlocks all shapes
+	if c.HasSubscription || c.IsPrivileged || c.ID == s.cfg.AdminTGID {
+		s.sendError(c, "Форма уже доступна с вашей подпиской")
+		return
+	}
+	// Check if already owned
+	for _, owned := range c.OwnedShapes {
+		if owned == shapeID {
+			s.sendError(c, "Форма уже куплена")
+			return
+		}
+	}
+
+	url, err := s.createShapeInvoiceLink(shapeID, c.ID)
+	if err != nil {
+		s.sendError(c, fmt.Sprintf("Не удалось создать платёж: %v", err))
+		return
+	}
+
+	s.send(c, map[string]any{
+		"type":    "invoice_link",
+		"url":     url,
+		"shapeId": shapeID,
+	})
+}
+
+func (s *Server) createShapeInvoiceLink(shapeID, playerID string) (string, error) {
+	title := shapeNames[shapeID]
+	if title == "" {
+		title = shapeID
+	}
+
+	payload := "shape:" + shapeID
+
+	reqBody, err := json.Marshal(map[string]any{
+		"title":          "Форма «" + title + "»",
+		"description":    "Форма поля «" + title + "» навсегда",
+		"payload":        payload,
+		"currency":       "XTR",
+		"prices":         []map[string]any{{"label": "Форма поля", "amount": 79}},
+		"provider_token": "",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
+	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool   `json:"ok"`
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK {
+		return "", fmt.Errorf("telegram API error")
+	}
+	return result.Result, nil
+}
+
+func (s *Server) purchaseShapeForPlayer(playerID, shapeID string) error {
+	ctx := context.Background()
+	if err := s.purchaseShapeDB(ctx, playerID, shapeID); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	c := s.clients[playerID]
+	s.mu.RUnlock()
+
+	if c == nil {
+		return nil
+	}
+
+	c.OwnedShapes = s.getUserOwnedShapes(ctx, playerID)
+	s.send(c, map[string]any{
+		"type":        "shape_purchased",
+		"shapeId":     shapeID,
+		"ownedShapes": c.OwnedShapes,
+	})
 	return nil
 }
 

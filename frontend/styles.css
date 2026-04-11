@@ -357,6 +357,66 @@ h1 {
   margin-top: 10px;
 }
 
+/* Shape selector */
+.shape-selector {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.shape-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 4px 5px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  position: relative;
+  font-size: 11px;
+}
+
+.shape-btn:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.shape-btn-active {
+  background: rgba(124, 58, 237, 0.28);
+  border-color: var(--primary);
+}
+
+.shape-btn-locked {
+  opacity: 0.65;
+}
+
+.shape-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.shape-name {
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.shape-lock {
+  font-size: 9px;
+  color: var(--warn);
+  position: absolute;
+  top: 3px;
+  right: 4px;
+}
+
 .controls {
   display: flex;
   flex-direction: column;
@@ -847,6 +907,14 @@ h1 {
 .cell[data-adj="6"] { color: #22d3ee; }
 .cell[data-adj="7"] { color: #f472b6; }
 .cell[data-adj="8"] { color: #facc15; }
+
+.cell.cell-inactive {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;
+  cursor: default;
+}
 
 .board-toolbar {
   margin-top: 12px;

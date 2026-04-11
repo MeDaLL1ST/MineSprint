@@ -60,7 +60,8 @@ func main() {
 			pq := update.PreCheckoutQuery
 			if strings.HasPrefix(pq.InvoicePayload, "revive:") ||
 				strings.HasPrefix(pq.InvoicePayload, "skin:") ||
-				strings.HasPrefix(pq.InvoicePayload, "sub:") {
+				strings.HasPrefix(pq.InvoicePayload, "sub:") ||
+				strings.HasPrefix(pq.InvoicePayload, "shape:") {
 				_, _ = bot.Request(tgbotapi.PreCheckoutConfig{
 					PreCheckoutQueryID: pq.ID,
 					OK:                 true,
@@ -90,6 +91,11 @@ func main() {
 				if err := notifySubscribe(cfg, playerID); err != nil {
 					log.Printf("subscription notify error for player %s: %v", playerID, err)
 				}
+			} else if strings.HasPrefix(sp.InvoicePayload, "shape:") {
+				shapeID := strings.TrimPrefix(sp.InvoicePayload, "shape:")
+				if err := notifyShapePurchase(cfg, playerID, shapeID); err != nil {
+					log.Printf("shape purchase notify error for player %s shape %s: %v", playerID, shapeID, err)
+				}
 			}
 			continue
 		}
@@ -108,6 +114,27 @@ func main() {
 			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "")
 		}
 	}
+}
+
+func notifyShapePurchase(cfg app.Config, playerID, shapeID string) error {
+	body, _ := json.Marshal(map[string]string{
+		"secret":   cfg.InternalSecret,
+		"playerId": playerID,
+		"shapeId":  shapeID,
+	})
+	resp, err := http.Post(
+		cfg.InternalServerURL+"/api/internal/purchase_shape",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func notifySkinPurchase(cfg app.Config, playerID, skinID string) error {
