@@ -19,6 +19,7 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/internal/purchase_skin", s.handleInternalPurchaseSkin)
 	mux.HandleFunc("/api/internal/subscribe", s.handleInternalSubscribe)
 	mux.HandleFunc("/api/admin/grant-skin", s.handleAdminGrantSkin)
+	mux.HandleFunc("/api/admin/revoke-skin", s.handleAdminRevokeSkin)
 	mux.HandleFunc("/api/admin/grant-privilege", s.handleAdminGrantPrivilege)
 	mux.HandleFunc("/api/admin/revoke-privilege", s.handleAdminRevokePrivilege)
 	mux.HandleFunc("/ws", s.handleWS)
@@ -593,6 +594,60 @@ func (s *Server) handleAdminGrantSkin(w http.ResponseWriter, r *http.Request) {
 	if err := s.adminGrantSkin(req.UserID, req.SkinID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminRevokeSkin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	_, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID string `json:"userId"`
+		SkinID string `json:"skinId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.SkinID = strings.TrimSpace(req.SkinID)
+	if req.UserID == "" || req.SkinID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId and skinId are required"})
+		return
+	}
+
+	ctx := r.Context()
+	if err := s.revokeUserSkin(ctx, req.UserID, req.SkinID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	// Notify connected client immediately
+	s.mu.RLock()
+	c := s.clients[req.UserID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.OwnedSkins = s.getUserOwnedSkins(ctx, req.UserID)
+		if c.ActiveSkin == req.SkinID {
+			c.ActiveSkin = "default"
+		}
+		s.send(c, map[string]any{
+			"type":       "skin_revoked",
+			"skinId":     req.SkinID,
+			"activeSkin": c.ActiveSkin,
+			"ownedSkins": c.OwnedSkins,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

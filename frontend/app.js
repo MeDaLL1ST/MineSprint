@@ -562,6 +562,19 @@ function handleMessage(msg) {
     return;
   }
 
+  if (msg.type === "skin_revoked") {
+    if (Array.isArray(msg.ownedSkins)) {
+      ownedSkins = msg.ownedSkins;
+    }
+    if (msg.activeSkin) {
+      activeSkinId = msg.activeSkin;
+      applySkin(activeSkinId);
+    }
+    skinPurchasePending = null;
+    renderSkinsGrid();
+    return;
+  }
+
   if (msg.type === "room_created") {
     toast(`Комната ${msg.code} создана`);
     setBadge("ROOM", "ok");
@@ -1665,13 +1678,21 @@ function renderAdmin() {
             : `<button class="ban-btn" data-grant-privilege="${item.id}">Дать безлимит</button>`;
           const skinBtns = isAdminUser ? "" : `
             <div class="admin-skin-grant">
-              <span>Скин:</span>
+              <span>Выдать:</span>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="matrix">Matrix</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="sunset">Закат</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="ocean">Океан</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="neon">Неон</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="arctic">Арктика</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="all">Все</button>
+            </div>
+            <div class="admin-skin-grant">
+              <span>Забрать:</span>
+              <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="matrix">Matrix</button>
+              <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="sunset">Закат</button>
+              <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="ocean">Океан</button>
+              <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="neon">Неон</button>
+              <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="arctic">Арктика</button>
             </div>
           `;
           return `
@@ -1747,6 +1768,10 @@ function bindAdminButtons() {
   document.querySelectorAll("[data-grant-skin]").forEach((btn) => {
     btn.onclick = async () => { await setGrantSkin(btn.dataset.grantSkin, btn.dataset.skinId, btn); };
   });
+
+  document.querySelectorAll("[data-revoke-skin]").forEach((btn) => {
+    btn.onclick = async () => { await setRevokeSkin(btn.dataset.revokeSkin, btn.dataset.skinId, btn); };
+  });
 }
 
 async function setPrivilege(userId, grant) {
@@ -1800,6 +1825,52 @@ async function setGrantSkin(userId, skinId, btn) {
       }, 2000);
     }
     toast(skinId === "all" ? "Все скины выданы" : "Скин выдан");
+  } catch (e) {
+    if (btn) {
+      btn.textContent = "✗";
+      btn.classList.add("grant-error");
+      setTimeout(() => {
+        if (btn.isConnected) {
+          btn.textContent = origText;
+          btn.classList.remove("grant-error");
+          btn.disabled = false;
+        }
+      }, 2000);
+    }
+    toast(e.message || "Ошибка");
+  }
+}
+
+async function setRevokeSkin(userId, skinId, btn) {
+  if (!userId || !skinId) return;
+  const origText = btn?.textContent ?? "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "…";
+  }
+  try {
+    const res = await fetch("/api/admin/revoke-skin", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Telegram-Init-Data": tg.initData,
+      },
+      body: JSON.stringify({ userId, skinId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    if (btn) {
+      btn.textContent = "✓";
+      btn.classList.add("granted");
+      setTimeout(() => {
+        if (btn.isConnected) {
+          btn.textContent = origText;
+          btn.classList.remove("granted");
+          btn.disabled = false;
+        }
+      }, 2000);
+    }
+    toast("Скин отозван");
   } catch (e) {
     if (btn) {
       btn.textContent = "✗";

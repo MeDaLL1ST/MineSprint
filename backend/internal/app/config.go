@@ -21,7 +21,7 @@ type Config struct {
 }
 
 func LoadConfig() Config {
-	ttlMin := getenvInt("ROOM_TTL_MINUTES", 30)
+	ttlMin := getenvInt("ROOM_TTL_MINUTES", 1440) // default 24 hours
 
 	return Config{
 		Port:              getenv("PORT", "8080"),

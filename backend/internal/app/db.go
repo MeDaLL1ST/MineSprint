@@ -224,6 +224,23 @@ func (s *Server) purchaseSkinDB(ctx context.Context, userID, skinID string) erro
 	return s.setActiveSkinDB(ctx, userID, skinID)
 }
 
+func (s *Server) revokeUserSkin(ctx context.Context, userID, skinID string) error {
+	_, err := s.db.Exec(ctx,
+		`delete from user_skins where user_id = $1 and skin_id = $2`,
+		userID, skinID,
+	)
+	if err != nil {
+		return err
+	}
+	// If this was the active skin, reset to default
+	_, _ = s.db.Exec(ctx,
+		`update user_active_skin set skin_id = 'default'
+		 where user_id = $1 and skin_id = $2`,
+		userID, skinID,
+	)
+	return nil
+}
+
 func (s *Server) setActiveSkinDB(ctx context.Context, userID, skinID string) error {
 	_, err := s.db.Exec(ctx,
 		`insert into user_active_skin (user_id, skin_id) values ($1, $2)
