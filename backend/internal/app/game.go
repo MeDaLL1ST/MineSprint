@@ -862,7 +862,7 @@ func getShapeMask(shape string, rows, cols int) []bool {
 	case "x_shape":
 		for row := 0; row < rows; row++ {
 			for col := 0; col < cols; col++ {
-				thickness := math.Max(float64(min(rows, cols))/8.0, 1.5)
+				thickness := math.Max(float64(min(rows, cols))/4.0, 2.0)
 				var d1, d2 float64
 				if rows > 1 {
 					ratio := float64(row) / float64(rows-1)
@@ -873,9 +873,11 @@ func getShapeMask(shape string, rows, cols int) []bool {
 			}
 		}
 	case "frame_x":
+		// Border thickness scales with field size: at least 2 cells, ~1/8 of the shorter side.
+		bt := max(2, min(rows, cols)/8)
 		for row := 0; row < rows; row++ {
 			for col := 0; col < cols; col++ {
-				isBorder := row == 0 || row == rows-1 || col == 0 || col == cols-1
+				isBorder := row < bt || row >= rows-bt || col < bt || col >= cols-bt
 				var isX bool
 				if rows > 1 {
 					thickness := math.Max(float64(min(rows, cols))/8.0, 1.5)
