@@ -288,6 +288,48 @@ func (s *Server) handleReviveRequest(c *Client) {
 	})
 }
 
+// adminGrantShape grants one or all premium shapes to a user without charging them.
+// shapeID may be "all" to grant every premium shape.
+func (s *Server) adminGrantShape(userID, shapeID string) error {
+	ctx := context.Background()
+	if shapeID == "all" {
+		for id := range validShapeIDs {
+			if id == "square" {
+				continue // square is always free
+			}
+			if _, err := s.db.Exec(ctx,
+				`insert into user_shapes (user_id, shape_id) values ($1, $2) on conflict do nothing`,
+				userID, id,
+			); err != nil {
+				return err
+			}
+		}
+	} else {
+		if !validShapeIDs[shapeID] || shapeID == "square" {
+			return fmt.Errorf("неизвестная форма: %s", shapeID)
+		}
+		if _, err := s.db.Exec(ctx,
+			`insert into user_shapes (user_id, shape_id) values ($1, $2) on conflict do nothing`,
+			userID, shapeID,
+		); err != nil {
+			return err
+		}
+	}
+
+	s.mu.RLock()
+	c := s.clients[userID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.OwnedShapes = s.getUserOwnedShapes(ctx, userID)
+		s.send(c, map[string]any{
+			"type":        "shape_purchased",
+			"shapeId":     shapeID,
+			"ownedShapes": c.OwnedShapes,
+		})
+	}
+	return nil
+}
+
 // adminGrantSkin grants one or all skins to a user without charging them.
 // skinID may be "all" to grant every skin in the catalog.
 func (s *Server) adminGrantSkin(userID, skinID string) error {

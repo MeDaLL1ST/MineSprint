@@ -23,6 +23,8 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/admin/revoke-skin", s.handleAdminRevokeSkin)
 	mux.HandleFunc("/api/admin/grant-privilege", s.handleAdminGrantPrivilege)
 	mux.HandleFunc("/api/admin/revoke-privilege", s.handleAdminRevokePrivilege)
+	mux.HandleFunc("/api/admin/grant-shape", s.handleAdminGrantShape)
+	mux.HandleFunc("/api/admin/revoke-shape", s.handleAdminRevokeShape)
 	mux.HandleFunc("/ws", s.handleWS)
 	return mux
 }
@@ -777,6 +779,94 @@ func (s *Server) handleAdminRevokePrivilege(w http.ResponseWriter, r *http.Reque
 		s.send(c, map[string]any{
 			"type":         "privilege_revoked",
 			"isPrivileged": false,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminGrantShape(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	_, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID  string `json:"userId"`
+		ShapeID string `json:"shapeId"` // specific shape ID or "all"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.ShapeID = strings.TrimSpace(req.ShapeID)
+	if req.UserID == "" || req.ShapeID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId and shapeId are required"})
+		return
+	}
+
+	if err := s.adminGrantShape(req.UserID, req.ShapeID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminRevokeShape(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	_, err := s.requireAdmin(r)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		UserID  string `json:"userId"`
+		ShapeID string `json:"shapeId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
+		return
+	}
+
+	req.UserID = strings.TrimSpace(req.UserID)
+	req.ShapeID = strings.TrimSpace(req.ShapeID)
+	if req.UserID == "" || req.ShapeID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "userId and shapeId are required"})
+		return
+	}
+
+	ctx := r.Context()
+	if _, err := s.db.Exec(ctx,
+		`delete from user_shapes where user_id = $1 and shape_id = $2`,
+		req.UserID, req.ShapeID,
+	); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	s.mu.RLock()
+	c := s.clients[req.UserID]
+	s.mu.RUnlock()
+	if c != nil {
+		c.OwnedShapes = s.getUserOwnedShapes(ctx, req.UserID)
+		s.send(c, map[string]any{
+			"type":        "shape_revoked",
+			"shapeId":     req.ShapeID,
+			"ownedShapes": c.OwnedShapes,
 		})
 	}
 

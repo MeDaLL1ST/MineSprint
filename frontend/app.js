@@ -575,6 +575,17 @@ function handleMessage(msg) {
     return;
   }
 
+  if (msg.type === "shape_revoked") {
+    if (Array.isArray(msg.ownedShapes)) {
+      ownedShapes = msg.ownedShapes;
+    }
+    if (msg.shapeId && selectedShape === msg.shapeId) {
+      selectedShape = "square";
+    }
+    renderShapeSelector();
+    return;
+  }
+
   if (msg.type === "skin_selected" || msg.type === "skin_purchased") {
     if (msg.activeSkin) {
       activeSkinId = msg.activeSkin;
@@ -1726,7 +1737,7 @@ function renderAdmin() {
             : `<button class="ban-btn" data-grant-privilege="${item.id}">Дать безлимит</button>`;
           const skinBtns = isAdminUser ? "" : `
             <div class="admin-skin-grant">
-              <span>Выдать:</span>
+              <span>Скины выдать:</span>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="matrix">Matrix</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="sunset">Закат</button>
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="ocean">Океан</button>
@@ -1735,12 +1746,29 @@ function renderAdmin() {
               <button class="ban-btn" data-grant-skin="${escapeHtml(item.id)}" data-skin-id="all">Все</button>
             </div>
             <div class="admin-skin-grant">
-              <span>Забрать:</span>
+              <span>Скины забрать:</span>
               <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="matrix">Matrix</button>
               <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="sunset">Закат</button>
               <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="ocean">Океан</button>
               <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="neon">Неон</button>
               <button class="ban-btn ban" data-revoke-skin="${escapeHtml(item.id)}" data-skin-id="arctic">Арктика</button>
+            </div>
+            <div class="admin-skin-grant">
+              <span>Формы выдать:</span>
+              <button class="ban-btn" data-grant-shape="${escapeHtml(item.id)}" data-shape-id="circle">Круг</button>
+              <button class="ban-btn" data-grant-shape="${escapeHtml(item.id)}" data-shape-id="diamond">Ромб</button>
+              <button class="ban-btn" data-grant-shape="${escapeHtml(item.id)}" data-shape-id="cross">Крест</button>
+              <button class="ban-btn" data-grant-shape="${escapeHtml(item.id)}" data-shape-id="x_shape">Икс</button>
+              <button class="ban-btn" data-grant-shape="${escapeHtml(item.id)}" data-shape-id="frame_x">Рамка</button>
+              <button class="ban-btn" data-grant-shape="${escapeHtml(item.id)}" data-shape-id="all">Все</button>
+            </div>
+            <div class="admin-skin-grant">
+              <span>Формы забрать:</span>
+              <button class="ban-btn ban" data-revoke-shape="${escapeHtml(item.id)}" data-shape-id="circle">Круг</button>
+              <button class="ban-btn ban" data-revoke-shape="${escapeHtml(item.id)}" data-shape-id="diamond">Ромб</button>
+              <button class="ban-btn ban" data-revoke-shape="${escapeHtml(item.id)}" data-shape-id="cross">Крест</button>
+              <button class="ban-btn ban" data-revoke-shape="${escapeHtml(item.id)}" data-shape-id="x_shape">Икс</button>
+              <button class="ban-btn ban" data-revoke-shape="${escapeHtml(item.id)}" data-shape-id="frame_x">Рамка</button>
             </div>
           `;
           return `
@@ -1819,6 +1847,14 @@ function bindAdminButtons() {
 
   document.querySelectorAll("[data-revoke-skin]").forEach((btn) => {
     btn.onclick = async () => { await setRevokeSkin(btn.dataset.revokeSkin, btn.dataset.skinId, btn); };
+  });
+
+  document.querySelectorAll("[data-grant-shape]").forEach((btn) => {
+    btn.onclick = async () => { await setGrantShape(btn.dataset.grantShape, btn.dataset.shapeId, btn); };
+  });
+
+  document.querySelectorAll("[data-revoke-shape]").forEach((btn) => {
+    btn.onclick = async () => { await setRevokeShape(btn.dataset.revokeShape, btn.dataset.shapeId, btn); };
   });
 }
 
@@ -1929,6 +1965,70 @@ async function setRevokeSkin(userId, skinId, btn) {
           btn.classList.remove("grant-error");
           btn.disabled = false;
         }
+      }, 2000);
+    }
+    toast(e.message || "Ошибка");
+  }
+}
+
+async function setGrantShape(userId, shapeId, btn) {
+  if (!userId || !shapeId) return;
+  const origText = btn?.textContent ?? "";
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    const res = await fetch("/api/admin/grant-shape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg.initData },
+      body: JSON.stringify({ userId, shapeId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    if (btn) {
+      btn.textContent = "✓";
+      btn.classList.add("granted");
+      setTimeout(() => {
+        if (btn.isConnected) { btn.textContent = origText; btn.classList.remove("granted"); btn.disabled = false; }
+      }, 2000);
+    }
+    toast(shapeId === "all" ? "Все формы выданы" : "Форма выдана");
+  } catch (e) {
+    if (btn) {
+      btn.textContent = "✗";
+      btn.classList.add("grant-error");
+      setTimeout(() => {
+        if (btn.isConnected) { btn.textContent = origText; btn.classList.remove("grant-error"); btn.disabled = false; }
+      }, 2000);
+    }
+    toast(e.message || "Ошибка");
+  }
+}
+
+async function setRevokeShape(userId, shapeId, btn) {
+  if (!userId || !shapeId) return;
+  const origText = btn?.textContent ?? "";
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    const res = await fetch("/api/admin/revoke-shape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg.initData },
+      body: JSON.stringify({ userId, shapeId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "request failed");
+    if (btn) {
+      btn.textContent = "✓";
+      btn.classList.add("granted");
+      setTimeout(() => {
+        if (btn.isConnected) { btn.textContent = origText; btn.classList.remove("granted"); btn.disabled = false; }
+      }, 2000);
+    }
+    toast("Форма отозвана");
+  } catch (e) {
+    if (btn) {
+      btn.textContent = "✗";
+      btn.classList.add("grant-error");
+      setTimeout(() => {
+        if (btn.isConnected) { btn.textContent = origText; btn.classList.remove("grant-error"); btn.disabled = false; }
       }, 2000);
     }
     toast(e.message || "Ошибка");
