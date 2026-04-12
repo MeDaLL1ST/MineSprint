@@ -10,11 +10,11 @@ const LONG_PRESS_MS = 380;
 
 const SHAPE_CATALOG = [
   { id: "square",  name: "Квадрат",        icon: "◼", price: 0  },
-  { id: "circle",  name: "Круг",           icon: "●", price: 79 },
-  { id: "diamond", name: "Ромб",           icon: "◆", price: 79 },
-  { id: "cross",   name: "Крест",          icon: "✚", price: 79 },
-  { id: "x_shape", name: "Икс",            icon: "✕", price: 79 },
-  { id: "frame_x", name: "Рамка с иксом",  icon: "⊠", price: 79 },
+  { id: "circle",  name: "Круг",           icon: "●", price: 39 },
+  { id: "diamond", name: "Ромб",           icon: "◆", price: 39 },
+  { id: "cross",   name: "Крест",          icon: "✚", price: 39 },
+  { id: "x_shape", name: "Икс",            icon: "✕", price: 39 },
+  { id: "frame_x", name: "Рамка с иксом",  icon: "⊠", price: 39 },
 ];
 
 const SKIN_CATALOG = [
@@ -29,7 +29,7 @@ const SKIN_CATALOG = [
   {
     id: "matrix",
     name: "Матрица",
-    price: 49,
+    price: 19,
     previewClass: "skin-preview-matrix",
     activeClass: "active-matrix",
     cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
@@ -37,7 +37,7 @@ const SKIN_CATALOG = [
   {
     id: "sunset",
     name: "Закат",
-    price: 49,
+    price: 19,
     previewClass: "skin-preview-sunset",
     activeClass: "active-sunset",
     cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
@@ -45,7 +45,7 @@ const SKIN_CATALOG = [
   {
     id: "ocean",
     name: "Океан",
-    price: 49,
+    price: 19,
     previewClass: "skin-preview-ocean",
     activeClass: "active-ocean",
     cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
@@ -53,7 +53,7 @@ const SKIN_CATALOG = [
   {
     id: "neon",
     name: "Неон",
-    price: 49,
+    price: 19,
     previewClass: "skin-preview-neon",
     activeClass: "active-neon",
     cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],
@@ -61,7 +61,7 @@ const SKIN_CATALOG = [
   {
     id: "arctic",
     name: "Арктика",
-    price: 49,
+    price: 19,
     previewClass: "skin-preview-arctic",
     activeClass: "active-arctic",
     cells: ["","sp-open","sp-me","","sp-open","","sp-mine","sp-open","","sp-open","","","sp-open","sp-open","","sp-open"],

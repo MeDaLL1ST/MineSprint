@@ -514,7 +514,7 @@ func (s *Server) handleInternalPurchaseSkin(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.recordPurchase(req.PlayerID, "skin", req.SkinID, 49)
+	s.recordPurchase(req.PlayerID, "skin", req.SkinID, 19)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -551,7 +551,7 @@ func (s *Server) handleInternalPurchaseShape(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	s.recordPurchase(req.PlayerID, "shape", req.ShapeID, 79)
+	s.recordPurchase(req.PlayerID, "shape", req.ShapeID, 39)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -586,7 +586,7 @@ func (s *Server) handleInternalSubscribe(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.recordPurchase(req.PlayerID, "subscription", "", 259)
+	s.recordPurchase(req.PlayerID, "subscription", "", 129)
 
 	// Notify connected client immediately
 	s.mu.RLock()

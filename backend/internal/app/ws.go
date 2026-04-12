@@ -473,7 +473,7 @@ func (s *Server) createShapeInvoiceLink(shapeID, playerID string) (string, error
 		"description":    "Форма поля «" + title + "» навсегда",
 		"payload":        payload,
 		"currency":       "XTR",
-		"prices":         []map[string]any{{"label": "Форма поля", "amount": 79}},
+		"prices":         []map[string]any{{"label": "Форма поля", "amount": 39}},
 		"provider_token": "",
 	})
 	if err != nil {
@@ -636,7 +636,7 @@ func (s *Server) createSubscriptionInvoiceLink(playerID string) (string, error) 
 		"description":    "До 10 игроков в Co-op комнатах на 30 дней",
 		"payload":        payload,
 		"currency":       "XTR",
-		"prices":         []map[string]any{{"label": "Pro подписка (30 дней)", "amount": 259}},
+		"prices":         []map[string]any{{"label": "Pro подписка (30 дней)", "amount": 129}},
 		"provider_token": "",
 	})
 	if err != nil {
@@ -680,7 +680,7 @@ func (s *Server) createSkinInvoiceLink(skinID, playerID string) (string, error) 
 		"description":    "Дизайн поля «" + title + "» навсегда",
 		"payload":        payload,
 		"currency":       "XTR",
-		"prices":         []map[string]any{{"label": "Скин", "amount": 49}},
+		"prices":         []map[string]any{{"label": "Скин", "amount": 19}},
 		"provider_token": "",
 	})
 	if err != nil {
