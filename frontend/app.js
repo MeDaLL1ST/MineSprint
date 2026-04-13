@@ -157,6 +157,9 @@ const els = {
   betsPanel: $("#betsPanel"),
   starCreditsDisplay: $("#starCreditsDisplay"),
 
+  inviteToGameBtn: $("#inviteToGameBtn"),
+  versusHint: $("#versusHint"),
+
   toast: $("#toast"),
   boardCard: document.querySelector(".board-card"),
 };
@@ -330,6 +333,11 @@ function bindUI() {
     indicateGameAction("Подключаемся к комнате...");
     send({ type: "join_room", code });
     impact("light");
+  });
+
+  els.inviteToGameBtn.addEventListener("click", () => {
+    send({ type: "promote_solo_to_room" });
+    impact("medium");
   });
 
   els.shareBtn.addEventListener("click", shareRoomLink);
@@ -858,6 +866,10 @@ function renderModeButtons() {
     btn.classList.toggle("active", btn.dataset.mode === selectedMode);
   });
 
+  if (els.versusHint) {
+    els.versusHint.classList.toggle("hidden", selectedMode !== "versus");
+  }
+
   inputButtons.forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.input === inputMode);
   });
@@ -873,6 +885,9 @@ function renderRoomControls() {
   const hasRoom = !!state?.roomCode;
 
   els.startSoloBtn.classList.toggle("hidden", !isSoloSelected);
+  // Show "invite to game" only during an active (non-over) solo game.
+  const canInvite = isSoloSelected && !!state && state.mode === "solo" && !state.over;
+  els.inviteToGameBtn.classList.toggle("hidden", !canInvite);
   els.createRoomBtn.classList.toggle("hidden", isSoloSelected || inOnlineState);
   els.joinBox.classList.toggle("hidden", isSoloSelected || inOnlineState);
 

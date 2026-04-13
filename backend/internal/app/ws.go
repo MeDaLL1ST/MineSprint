@@ -144,6 +144,8 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.revealCell(c, act.Cell)
 	case "toggle_flag":
 		s.toggleFlag(c, act.Cell)
+	case "promote_solo_to_room":
+		s.promoteSoloToRoom(c)
 	case "hover":
 		s.setHover(c, act.Cell)
 	case "revive_request":

@@ -1128,6 +1128,55 @@ func newGame(mode, shape string, rows, cols, mines int, players []string, names 
 	}
 }
 
+// promoteSoloToRoom converts the caller's active solo game into a coop room
+// so a friend can join without losing the current board state.
+func (s *Server) promoteSoloToRoom(c *Client) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	game := s.currentGameLocked(c.ID)
+	if game == nil {
+		s.sendError(c, "Нет активной игры")
+		return
+	}
+
+	game.mu.Lock()
+
+	if game.Mode != "solo" {
+		game.mu.Unlock()
+		s.sendError(c, "Уже в комнате — поделись ссылкой через кнопку «Поделиться»")
+		return
+	}
+	if game.Over {
+		game.mu.Unlock()
+		s.sendError(c, "Игра завершена — запусти новую и тогда приглашай")
+		return
+	}
+
+	code := s.generateRoomCodeLocked()
+	game.Mode = "coop"
+	game.RoomCode = code
+	game.OwnerID = c.ID
+
+	s.rooms[code] = &Room{
+		Code:      code,
+		OwnerID:   c.ID,
+		Game:      game,
+		CreatedAt: time.Now(),
+	}
+
+	snaps := s.buildStateSnaps(game)
+	game.mu.Unlock()
+
+	s.send(c, map[string]any{
+		"type":      "room_created",
+		"code":      code,
+		"link":      s.buildInviteLink(code),
+		"shareLink": s.buildShareLink(code),
+	})
+	s.sendBroadcastLocked(marshalStateSnaps(snaps))
+}
+
 func (s *Server) generateRoomCodeLocked() string {
 	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 	for {
