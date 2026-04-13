@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"tg-minesweeper/backend/internal/app"
@@ -61,7 +62,8 @@ func main() {
 			if strings.HasPrefix(pq.InvoicePayload, "revive:") ||
 				strings.HasPrefix(pq.InvoicePayload, "skin:") ||
 				strings.HasPrefix(pq.InvoicePayload, "sub:") ||
-				strings.HasPrefix(pq.InvoicePayload, "shape:") {
+				strings.HasPrefix(pq.InvoicePayload, "shape:") ||
+				strings.HasPrefix(pq.InvoicePayload, "bet:") {
 				_, _ = bot.Request(tgbotapi.PreCheckoutConfig{
 					PreCheckoutQueryID: pq.ID,
 					OK:                 true,
@@ -96,6 +98,16 @@ func main() {
 				if err := notifyShapePurchase(cfg, playerID, shapeID); err != nil {
 					log.Printf("shape purchase notify error for player %s shape %s: %v", playerID, shapeID, err)
 				}
+			} else if strings.HasPrefix(sp.InvoicePayload, "bet:") {
+				// payload: bet:{gameId}:{bettorId}:{targetId}:{amount}
+				parts := strings.SplitN(strings.TrimPrefix(sp.InvoicePayload, "bet:"), ":", 4)
+				if len(parts) == 4 {
+					gameID, bettorID, targetID, amountStr := parts[0], parts[1], parts[2], parts[3]
+					chargeID := sp.TelegramPaymentChargeID
+					if err := notifyBetPlace(cfg, gameID, bettorID, targetID, amountStr, chargeID); err != nil {
+						log.Printf("bet place notify error: %v", err)
+					}
+				}
 			}
 			continue
 		}
@@ -114,6 +126,34 @@ func main() {
 			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "")
 		}
 	}
+}
+
+func notifyBetPlace(cfg app.Config, gameID, bettorID, targetID, amountStr, chargeID string) error {
+	amount := 0
+	if n, err := strconv.Atoi(amountStr); err == nil {
+		amount = n
+	}
+	body, _ := json.Marshal(map[string]any{
+		"secret":   cfg.InternalSecret,
+		"gameId":   gameID,
+		"bettorId": bettorID,
+		"targetId": targetID,
+		"amount":   amount,
+		"chargeId": chargeID,
+	})
+	resp, err := http.Post(
+		cfg.InternalServerURL+"/api/internal/place_bet",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func notifyShapePurchase(cfg app.Config, playerID, shapeID string) error {

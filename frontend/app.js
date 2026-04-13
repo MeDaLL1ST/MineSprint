@@ -10,7 +10,7 @@ const LONG_PRESS_MS = 380;
 
 const SHAPE_CATALOG = [
   { id: "square",  name: "Квадрат",        icon: "◼", price: 0  },
-  { id: "circle",  name: "Круг",           icon: "●", price: 39 },
+  { id: "circle",  name: "Круг",           icon: "●", price: 0  },
   { id: "diamond", name: "Ромб",           icon: "◆", price: 39 },
   { id: "cross",   name: "Крест",          icon: "✚", price: 39 },
   { id: "x_shape", name: "Икс",            icon: "✕", price: 39 },
@@ -154,6 +154,7 @@ const els = {
   minesToggleLabel: $("#minesToggleLabel"),
   toggleChordCheckbox: $("#toggleChordCheckbox"),
   fieldSizeHint: $("#fieldSizeHint"),
+  betsPanel: $("#betsPanel"),
 
   toast: $("#toast"),
   boardCard: document.querySelector(".board-card"),
@@ -190,6 +191,7 @@ let subPurchasePending = false;
 
 let showMineCounter = true;
 let chordEnabled = true;
+let betPending = false;
 
 let modalScale = 1;
 let modalOffsetX = 0;
@@ -745,6 +747,13 @@ function handleMessage(msg) {
           renderProStatus(); // re-enable button
         }
         // If "paid" — wait for server subscription_activated message
+      } else if (msg.betPending) {
+        // Bet flow
+        betPending = false;
+        renderBettingPanel();
+        if (status === "paid") {
+          toast("Ставка принята! Ждём начала игры.");
+        }
       } else {
         // Revive flow
         revivePending = false;
@@ -760,9 +769,11 @@ function handleMessage(msg) {
     revivePending = false;
     skinPurchasePending = null;
     shapePurchasePending = null;
+    betPending = false;
     if (els.reviveBtn) els.reviveBtn.disabled = false;
     renderSkinsGrid();
     renderShapeSelector();
+    renderBettingPanel();
     toast(msg.message || "Ошибка");
     setBadge("ERROR", "danger");
     setStatus(msg.message || "Ошибка");
@@ -813,6 +824,7 @@ function render() {
   renderPlayers();
   renderBoards();
   renderOverlay();
+  renderBettingPanel();
   updateTopCounters();
   applyHoverDecorations();
 }
@@ -936,22 +948,83 @@ function renderPlayers() {
     div.className = "player-card";
     if (player.id === state.you?.id) div.classList.add("me");
     if (state.over && state.winnerId && player.id === state.winnerId) div.classList.add("winner");
+    const isTurn = state.mode === "versus" && !state.over && state.turnPlayerId === player.id;
+    if (isTurn) div.classList.add("turn");
 
     const skinId = player.skinId || "default";
+    const metaText = player.id === state.you?.id ? "Вы" : "Игрок";
+    const turnBadge = isTurn ? `<span class="turn-badge">ход</span>` : "";
     div.innerHTML = `
       <div class="player-row">
         <div class="player-main">
           <div class="player-name" style="display:flex;align-items:center;gap:6px;">
             <span class="player-skin-dot" data-skin="${escapeHtml(skinId)}"></span>
-            ${escapeHtml(player.name)}
+            ${escapeHtml(player.name)}${turnBadge}
           </div>
-          <div class="player-meta">${player.id === state.you?.id ? "Вы" : "Игрок"}</div>
+          <div class="player-meta">${metaText}</div>
         </div>
         <div class="player-score">${player.score ?? 0}</div>
       </div>
     `;
     els.playersGrid.appendChild(div);
   });
+}
+
+function renderBettingPanel() {
+  const panel = els.betsPanel;
+  if (!panel) return;
+
+  const showBets = !!(state && state.mode === "versus" && state.online && state.players?.length >= 2);
+  panel.classList.toggle("hidden", !showBets);
+  if (!showBets) return;
+
+  const canBet = !state.generated && !state.over;
+  const myBet = (state.bets || []).find((b) => b.bettorId === state.you?.id);
+  const others = (state.players || []).filter((p) => p.id !== state.you?.id);
+
+  let html = `<div class="bets-title">Ставки на взрыв</div>`;
+
+  // Existing bets
+  if (state.bets && state.bets.length > 0) {
+    html += `<div class="bets-list">`;
+    state.bets.forEach((b) => {
+      html += `<div class="bet-row"><span>${escapeHtml(b.bettorName)}</span><span>→ ${escapeHtml(b.targetName)}</span><span>${b.amount} ⭐</span></div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Betting form (before game starts, if haven't bet yet)
+  if (canBet && !myBet && others.length > 0) {
+    html += `<div class="bet-form">`;
+    html += `<select id="betTargetSelect" class="bet-select">`;
+    others.forEach((p) => {
+      html += `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`;
+    });
+    html += `</select>`;
+    html += `<input id="betAmountInput" type="text" inputmode="numeric" pattern="[0-9]*" class="bet-amount-input" placeholder="⭐ кол-во" value="5" maxlength="3" />`;
+    html += `<button id="placeBetBtn" class="btn btn-secondary"${betPending ? " disabled" : ""}>Поставить</button>`;
+    html += `</div>`;
+  } else if (myBet) {
+    html += `<div class="bet-confirmed">Ваша ставка: ${myBet.amount} ⭐ на ${escapeHtml(myBet.targetName)}</div>`;
+  } else if (!canBet && state.generated) {
+    html += `<div class="hint">Ставки закрыты — игра идёт</div>`;
+  }
+
+  panel.innerHTML = html;
+
+  const placeBetBtn = panel.querySelector("#placeBetBtn");
+  if (placeBetBtn) {
+    placeBetBtn.addEventListener("click", () => {
+      const targetId = panel.querySelector("#betTargetSelect")?.value;
+      const amountRaw = Number(panel.querySelector("#betAmountInput")?.value);
+      const amount = Math.max(1, Math.min(100, Math.floor(amountRaw) || 1));
+      if (!targetId) return;
+      betPending = true;
+      placeBetBtn.disabled = true;
+      send({ type: "bet_request", targetId, amount });
+      impact("light");
+    });
+  }
 }
 
 function renderBoards() {
@@ -1127,6 +1200,10 @@ function openCell(cellIndex) {
   if (!chordEnabled) {
     const cell = state?.board?.[cellIndex];
     if (cell?.o && !cell?.m && (cell?.a ?? 0) > 0) return;
+  }
+  if (state?.mode === "versus" && state?.generated && state?.turnPlayerId && state.turnPlayerId !== state?.you?.id) {
+    toast("Сейчас не ваш ход");
+    return;
   }
   send({ type: "reveal", cell: cellIndex });
 }

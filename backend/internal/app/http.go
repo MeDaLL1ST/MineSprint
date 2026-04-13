@@ -19,6 +19,7 @@ func NewMux(s *Server) http.Handler {
 	mux.HandleFunc("/api/internal/purchase_skin", s.handleInternalPurchaseSkin)
 	mux.HandleFunc("/api/internal/purchase_shape", s.handleInternalPurchaseShape)
 	mux.HandleFunc("/api/internal/subscribe", s.handleInternalSubscribe)
+	mux.HandleFunc("/api/internal/place_bet", s.handleInternalPlaceBet)
 	mux.HandleFunc("/api/admin/grant-skin", s.handleAdminGrantSkin)
 	mux.HandleFunc("/api/admin/revoke-skin", s.handleAdminRevokeSkin)
 	mux.HandleFunc("/api/admin/grant-privilege", s.handleAdminGrantPrivilege)
@@ -865,6 +866,89 @@ func (s *Server) handleAdminRevokeShape(w http.ResponseWriter, r *http.Request) 
 			"ownedShapes": c.OwnedShapes,
 		})
 	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleInternalPlaceBet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		Secret   string `json:"secret"`
+		GameID   string `json:"gameId"`
+		BettorID string `json:"bettorId"`
+		TargetID string `json:"targetId"`
+		Amount   int    `json:"amount"`
+		ChargeID string `json:"chargeId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad request"})
+		return
+	}
+
+	if subtle.ConstantTimeCompare([]byte(req.Secret), []byte(s.cfg.InternalSecret)) != 1 {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden"})
+		return
+	}
+
+	req.GameID = strings.TrimSpace(req.GameID)
+	req.BettorID = strings.TrimSpace(req.BettorID)
+	req.TargetID = strings.TrimSpace(req.TargetID)
+	req.ChargeID = strings.TrimSpace(req.ChargeID)
+	if req.GameID == "" || req.BettorID == "" || req.TargetID == "" || req.ChargeID == "" || req.Amount < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid fields"})
+		return
+	}
+
+	// Find the live game
+	s.mu.RLock()
+	var game *Game
+	for _, g := range s.games {
+		if g.ID == req.GameID {
+			game = g
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	if game == nil {
+		// Game already gone — refund immediately
+		go s.refundTelegramPayment(req.ChargeID, req.BettorID)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "refunded": true})
+		return
+	}
+
+	game.mu.Lock()
+	if game.Generated || game.Over {
+		game.mu.Unlock()
+		go s.refundTelegramPayment(req.ChargeID, req.BettorID)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "refunded": true})
+		return
+	}
+
+	// Deduplicate by chargeID
+	for _, b := range game.Bets {
+		if b.ChargeID == req.ChargeID {
+			game.mu.Unlock()
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+	}
+
+	game.Bets = append(game.Bets, GameBet{
+		BettorID: req.BettorID,
+		TargetID: req.TargetID,
+		Amount:   req.Amount,
+		ChargeID: req.ChargeID,
+	})
+	msgs := s.buildBroadcastMsgs(game)
+	game.mu.Unlock()
+
+	s.sendBroadcast(msgs)
+	go s.recordBet(req.GameID, req.BettorID, req.TargetID, req.ChargeID, req.Amount)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

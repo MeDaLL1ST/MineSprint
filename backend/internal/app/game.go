@@ -310,6 +310,16 @@ func (s *Server) revealCell(c *Client, idx int) {
 		game.Generated = true
 	}
 
+	// Turn enforcement for versus mode.
+	if game.Mode == "versus" && len(game.Players) > 1 {
+		turnPlayerID := game.Players[game.TurnIdx%len(game.Players)]
+		if c.ID != turnPlayerID {
+			game.mu.Unlock()
+			s.sendError(c, "Сейчас не ваш ход")
+			return
+		}
+	}
+
 	cell := &game.Board[idx]
 
 	// Chord: click on an already-opened numbered cell.
@@ -351,10 +361,12 @@ func (s *Server) revealCell(c *Client, idx int) {
 					game.WinnerID = ""
 				}
 				s.persistLaterLocked(game)
+				bets := append([]GameBet{}, game.Bets...)
 				msgs := s.buildBroadcastMsgs(game)
 				game.mu.Unlock()
 				s.sendBroadcast(msgs)
 				go s.recordMove(matchID, c.ID, "explode", 0)
+				go s.resolveBets(bets, c.ID, false)
 				return
 			}
 		}
@@ -377,6 +389,7 @@ func (s *Server) revealCell(c *Client, idx int) {
 		game.OpenedSafe += openedCount
 		game.Scores[c.ID] += openedCount
 
+		var bets []GameBet
 		if game.OpenedSafe == game.TotalSafe {
 			game.Over = true
 			game.EndedAt = time.Now()
@@ -390,12 +403,18 @@ func (s *Server) revealCell(c *Client, idx int) {
 				game.WinnerID = determineVersusWinner(game, "")
 			}
 			s.persistLaterLocked(game)
+			bets = append([]GameBet{}, game.Bets...)
+		} else if game.Mode == "versus" && len(game.Players) > 1 {
+			game.TurnIdx = (game.TurnIdx + 1) % len(game.Players)
 		}
 
 		msgs := s.buildBroadcastMsgs(game)
 		game.mu.Unlock()
 		s.sendBroadcast(msgs)
 		go s.recordMove(matchID, c.ID, "reveal", openedCount)
+		if bets != nil {
+			go s.resolveBets(bets, "", true)
+		}
 		return
 	}
 
@@ -419,10 +438,12 @@ func (s *Server) revealCell(c *Client, idx int) {
 			game.WinnerID = ""
 		}
 		s.persistLaterLocked(game)
+		bets := append([]GameBet{}, game.Bets...)
 		msgs := s.buildBroadcastMsgs(game)
 		game.mu.Unlock()
 		s.sendBroadcast(msgs)
 		go s.recordMove(matchID, c.ID, "explode", 0)
+		go s.resolveBets(bets, c.ID, false)
 		return
 	}
 
@@ -435,6 +456,7 @@ func (s *Server) revealCell(c *Client, idx int) {
 	game.OpenedSafe += openedCount
 	game.Scores[c.ID] += openedCount
 
+	var bets []GameBet
 	if game.OpenedSafe == game.TotalSafe {
 		game.Over = true
 		game.EndedAt = time.Now()
@@ -448,12 +470,18 @@ func (s *Server) revealCell(c *Client, idx int) {
 			game.WinnerID = determineVersusWinner(game, "")
 		}
 		s.persistLaterLocked(game)
+		bets = append([]GameBet{}, game.Bets...)
+	} else if game.Mode == "versus" && len(game.Players) > 1 {
+		game.TurnIdx = (game.TurnIdx + 1) % len(game.Players)
 	}
 
 	msgs := s.buildBroadcastMsgs(game)
 	game.mu.Unlock()
 	s.sendBroadcast(msgs)
 	go s.recordMove(matchID, c.ID, "reveal", openedCount)
+	if bets != nil {
+		go s.resolveBets(bets, "", true)
+	}
 }
 
 func (s *Server) revivePlayer(playerID string) error {
@@ -638,6 +666,9 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		if game.OwnerID == playerID || !contains(game.Players, game.OwnerID) {
 			game.OwnerID = game.Players[0]
 		}
+		if game.Mode == "versus" && game.TurnIdx >= len(game.Players) {
+			game.TurnIdx = 0
+		}
 		// Build messages while game.mu is held, then unlock and broadcast.
 		hoverMsgs := s.buildHoverMsgs(game, playerID, -1, false)
 		stateMsgs := s.buildBroadcastMsgs(game)
@@ -663,6 +694,9 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 	if game.OwnerID == playerID || !contains(game.Players, game.OwnerID) {
 		game.OwnerID = game.Players[0]
 		room.OwnerID = game.OwnerID
+	}
+	if game.Mode == "versus" && game.TurnIdx >= len(game.Players) {
+		game.TurnIdx = 0
 	}
 	hoverMsgs := s.buildHoverMsgs(game, playerID, -1, false)
 	stateMsgs := s.buildBroadcastMsgs(game)
@@ -752,6 +786,22 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		mySkin = g.Skins[playerID]
 	}
 
+	turnPlayerID := ""
+	if g.Mode == "versus" && len(g.Players) > 1 && !g.Over {
+		turnPlayerID = g.Players[g.TurnIdx%len(g.Players)]
+	}
+
+	var clientBets []ClientBet
+	for _, b := range g.Bets {
+		clientBets = append(clientBets, ClientBet{
+			BettorID:   b.BettorID,
+			BettorName: g.Names[b.BettorID],
+			TargetID:   b.TargetID,
+			TargetName: g.Names[b.TargetID],
+			Amount:     b.Amount,
+		})
+	}
+
 	return State{
 		GameID:     g.ID,
 		RoomCode:   g.RoomCode,
@@ -771,7 +821,7 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 		WinnerID:   g.WinnerID,
 		WinnerName: winnerName,
 		StartedAt:  g.StartedAt.Unix(),
-		EndedAt:    func() int64 {
+		EndedAt: func() int64 {
 			if g.Over && !g.EndedAt.IsZero() {
 				return g.EndedAt.Unix()
 			}
@@ -783,13 +833,15 @@ func (s *Server) buildStateLocked(g *Game, playerID string) State {
 			Score:  g.Scores[playerID],
 			SkinID: mySkin,
 		},
-		Players:    players,
-		Hovers:     hovers,
-		Status:     statusText(g, playerID),
-		Board:      board,
-		EndReason:  g.EndReason,
-		CanRevive:  canRevive,
-		ActiveSkin: mySkin,
+		Players:      players,
+		Hovers:       hovers,
+		Status:       statusText(g, playerID),
+		Board:        board,
+		EndReason:    g.EndReason,
+		CanRevive:    canRevive,
+		ActiveSkin:   mySkin,
+		TurnPlayerID: turnPlayerID,
+		Bets:         clientBets,
 	}
 }
 
@@ -821,7 +873,14 @@ func statusText(g *Game, playerID string) string {
 		case "coop":
 			return "Разминируйте поле вместе. Любая мина завершит раунд."
 		case "versus":
-			return "Соревнуйтесь за очки на одном поле. Мина завершает матч."
+			if len(g.Players) > 1 {
+				turnPlayerID := g.Players[g.TurnIdx%len(g.Players)]
+				if turnPlayerID == playerID {
+					return "Ваш ход — откройте клетку."
+				}
+				return "Ход игрока " + g.Names[turnPlayerID] + "."
+			}
+			return "Ждём игроков..."
 		}
 	}
 
@@ -1009,7 +1068,7 @@ func abs(x int) int {
 }
 
 func (s *Server) canUseShape(c *Client, shapeID string) bool {
-	if shapeID == "" || shapeID == "square" {
+	if shapeID == "" || shapeID == "square" || shapeID == "circle" {
 		return true
 	}
 	if c.ID == s.cfg.AdminTGID || c.IsPrivileged || c.HasSubscription {

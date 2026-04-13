@@ -31,6 +31,21 @@ type Cell struct {
 	OpenedBy string
 }
 
+type GameBet struct {
+	BettorID string
+	TargetID string
+	Amount   int
+	ChargeID string
+}
+
+type ClientBet struct {
+	BettorID   string `json:"bettorId"`
+	BettorName string `json:"bettorName"`
+	TargetID   string `json:"targetId"`
+	TargetName string `json:"targetName"`
+	Amount     int    `json:"amount"`
+}
+
 type Game struct {
 	mu             sync.Mutex // protects all mutable Game fields
 	ID             string
@@ -59,6 +74,8 @@ type Game struct {
 	RevivedPlayers map[string]bool
 	OpenedSafe     int // cached count of opened non-mine cells
 	FlaggedCount   int // cached count of flagged cells
+	TurnIdx        int // index into Players for whose turn it is (versus mode)
+	Bets           []GameBet
 }
 
 type Room struct {
@@ -70,16 +87,18 @@ type Room struct {
 }
 
 type Action struct {
-	Type    string `json:"type"`
-	Mode    string `json:"mode,omitempty"`
-	Code    string `json:"code,omitempty"`
-	Rows    int    `json:"rows,omitempty"`
-	Cols    int    `json:"cols,omitempty"`
-	Mines   int    `json:"mines,omitempty"`
-	Cell    int    `json:"cell,omitempty"`
-	SkinID  string `json:"skinId,omitempty"`
-	Shape   string `json:"shape,omitempty"`
-	ShapeID string `json:"shapeId,omitempty"`
+	Type     string `json:"type"`
+	Mode     string `json:"mode,omitempty"`
+	Code     string `json:"code,omitempty"`
+	Rows     int    `json:"rows,omitempty"`
+	Cols     int    `json:"cols,omitempty"`
+	Mines    int    `json:"mines,omitempty"`
+	Cell     int    `json:"cell,omitempty"`
+	SkinID   string `json:"skinId,omitempty"`
+	Shape    string `json:"shape,omitempty"`
+	ShapeID  string `json:"shapeId,omitempty"`
+	TargetID string `json:"targetId,omitempty"`
+	Amount   int    `json:"amount,omitempty"`
 }
 
 type ClientCell struct {
@@ -100,34 +119,36 @@ type PlayerBrief struct {
 }
 
 type State struct {
-	GameID     string         `json:"gameId"`
-	RoomCode   string         `json:"roomCode,omitempty"`
-	InviteLink string         `json:"inviteLink,omitempty"`
-	ShareLink  string         `json:"shareLink,omitempty"`
-	Mode       string         `json:"mode"`
-	Shape      string         `json:"shape,omitempty"`
-	Online     bool           `json:"online"`
-	OwnerID    string         `json:"ownerId,omitempty"`
-	Rows       int            `json:"rows"`
-	Cols       int            `json:"cols"`
-	Mines      int            `json:"mines"`
-	FlagsLeft  int            `json:"flagsLeft"`
-	Generated  bool           `json:"generated"`
-	Over       bool           `json:"over"`
-	Won        bool           `json:"won"`
-	WinnerID   string         `json:"winnerId,omitempty"`
-	WinnerName string         `json:"winnerName,omitempty"`
-	StartedAt  int64          `json:"startedAt"`
-	EndedAt    int64          `json:"endedAt,omitempty"`
-	You        PlayerBrief    `json:"you"`
-	Players    []PlayerBrief  `json:"players"`
-	Hovers     map[string]int `json:"hovers,omitempty"`
-	Status     string         `json:"status"`
-	Board      []ClientCell   `json:"board"`
-	EndReason  string         `json:"endReason,omitempty"`
-	CanRevive  bool           `json:"canRevive,omitempty"`
-	ActiveSkin string         `json:"activeSkin,omitempty"`
-	OwnedSkins []string       `json:"ownedSkins,omitempty"`
+	GameID       string         `json:"gameId"`
+	RoomCode     string         `json:"roomCode,omitempty"`
+	InviteLink   string         `json:"inviteLink,omitempty"`
+	ShareLink    string         `json:"shareLink,omitempty"`
+	Mode         string         `json:"mode"`
+	Shape        string         `json:"shape,omitempty"`
+	Online       bool           `json:"online"`
+	OwnerID      string         `json:"ownerId,omitempty"`
+	Rows         int            `json:"rows"`
+	Cols         int            `json:"cols"`
+	Mines        int            `json:"mines"`
+	FlagsLeft    int            `json:"flagsLeft"`
+	Generated    bool           `json:"generated"`
+	Over         bool           `json:"over"`
+	Won          bool           `json:"won"`
+	WinnerID     string         `json:"winnerId,omitempty"`
+	WinnerName   string         `json:"winnerName,omitempty"`
+	StartedAt    int64          `json:"startedAt"`
+	EndedAt      int64          `json:"endedAt,omitempty"`
+	You          PlayerBrief    `json:"you"`
+	Players      []PlayerBrief  `json:"players"`
+	Hovers       map[string]int `json:"hovers,omitempty"`
+	Status       string         `json:"status"`
+	Board        []ClientCell   `json:"board"`
+	EndReason    string         `json:"endReason,omitempty"`
+	CanRevive    bool           `json:"canRevive,omitempty"`
+	ActiveSkin   string         `json:"activeSkin,omitempty"`
+	OwnedSkins   []string       `json:"ownedSkins,omitempty"`
+	TurnPlayerID string         `json:"turnPlayerId,omitempty"`
+	Bets         []ClientBet    `json:"bets,omitempty"`
 }
 
 type LeaderboardEntry struct {

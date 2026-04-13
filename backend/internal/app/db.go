@@ -112,6 +112,17 @@ create table if not exists user_shapes (
   purchased_at timestamptz not null default now(),
   primary key (user_id, shape_id)
 );
+
+create table if not exists game_bets (
+  id bigserial primary key,
+  game_id text not null,
+  bettor_id text not null,
+  target_id text not null,
+  amount_stars int not null,
+  charge_id text not null unique,
+  refunded bool not null default false,
+  created_at timestamptz not null default now()
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -453,6 +464,22 @@ func (s *Server) getUserOwnedShapes(ctx context.Context, userID string) []string
 		}
 	}
 	return shapes
+}
+
+func (s *Server) recordBet(gameID, bettorID, targetID, chargeID string, amount int) {
+	_, _ = s.db.Exec(context.Background(),
+		`insert into game_bets (game_id, bettor_id, target_id, amount_stars, charge_id)
+         values ($1, $2, $3, $4, $5)
+         on conflict (charge_id) do nothing`,
+		gameID, bettorID, targetID, amount, chargeID,
+	)
+}
+
+func (s *Server) markBetRefunded(chargeID string) {
+	_, _ = s.db.Exec(context.Background(),
+		`update game_bets set refunded = true where charge_id = $1`,
+		chargeID,
+	)
 }
 
 func (s *Server) purchaseShapeDB(ctx context.Context, userID, shapeID string) error {

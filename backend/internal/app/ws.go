@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -151,6 +153,8 @@ func (s *Server) handleAction(c *Client, act Action) {
 		s.handleSubscribeRequest(c)
 	case "shape_purchase_request":
 		s.handleShapePurchaseRequest(c, act.ShapeID)
+	case "bet_request":
+		s.handleBetRequest(c, act.TargetID, act.Amount)
 	default:
 		s.sendError(c, "Неизвестное действие")
 	}
@@ -441,7 +445,7 @@ var shapeNames = map[string]string{
 }
 
 func (s *Server) handleShapePurchaseRequest(c *Client, shapeID string) {
-	if shapeID == "" || shapeID == "square" {
+	if shapeID == "" || shapeID == "square" || shapeID == "circle" {
 		s.sendError(c, "Эта форма бесплатна")
 		return
 	}
@@ -743,4 +747,142 @@ func (s *Server) createInvoiceLink(gameID, playerID string) (string, error) {
 		return "", fmt.Errorf("telegram API error")
 	}
 	return result.Result, nil
+}
+
+func (s *Server) handleBetRequest(c *Client, targetID string, amount int) {
+	if amount < 1 || amount > 100 {
+		s.sendError(c, "Ставка: от 1 до 100 звёзд")
+		return
+	}
+
+	s.mu.RLock()
+	game := s.currentGameLocked(c.ID)
+	if game == nil {
+		s.mu.RUnlock()
+		s.sendError(c, "Нет активной игры")
+		return
+	}
+	gameID := game.ID
+	s.mu.RUnlock()
+
+	game.mu.Lock()
+	if game.Mode != "versus" {
+		game.mu.Unlock()
+		s.sendError(c, "Ставки доступны только в режиме versus")
+		return
+	}
+	if game.Generated {
+		game.mu.Unlock()
+		s.sendError(c, "Игра уже началась — ставки закрыты")
+		return
+	}
+	if !contains(game.Players, targetID) {
+		game.mu.Unlock()
+		s.sendError(c, "Такого игрока нет в комнате")
+		return
+	}
+	if targetID == c.ID {
+		game.mu.Unlock()
+		s.sendError(c, "Нельзя ставить на себя")
+		return
+	}
+	for _, b := range game.Bets {
+		if b.BettorID == c.ID {
+			game.mu.Unlock()
+			s.sendError(c, "Ставка уже сделана")
+			return
+		}
+	}
+	game.mu.Unlock()
+
+	url, err := s.createBetInvoiceLink(gameID, c.ID, targetID, amount)
+	if err != nil {
+		s.sendError(c, fmt.Sprintf("Не удалось создать платёж: %v", err))
+		return
+	}
+
+	s.send(c, map[string]any{
+		"type":       "invoice_link",
+		"url":        url,
+		"betPending": true,
+		"targetId":   targetID,
+		"amount":     amount,
+	})
+}
+
+func (s *Server) createBetInvoiceLink(gameID, bettorID, targetID string, amount int) (string, error) {
+	payload := fmt.Sprintf("bet:%s:%s:%s:%d", gameID, bettorID, targetID, amount)
+
+	reqBody, err := json.Marshal(map[string]any{
+		"title":          "Ставка на взрыв",
+		"description":    fmt.Sprintf("Ставка %d ⭐ — угадай, кто взорвётся в MineSprint Versus", amount),
+		"payload":        payload,
+		"currency":       "XTR",
+		"prices":         []map[string]any{{"label": "Ставка", "amount": amount}},
+		"provider_token": "",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
+	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var betResult struct {
+		OK     bool   `json:"ok"`
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&betResult); err != nil {
+		return "", err
+	}
+	if !betResult.OK {
+		return "", fmt.Errorf("telegram API error")
+	}
+	return betResult.Result, nil
+}
+
+// resolveBets is called in a goroutine after a game ends.
+// If exploderID is set, refund bets whose target was the exploder.
+// If refundAll is true, refund every bet (board cleared).
+func (s *Server) resolveBets(bets []GameBet, exploderID string, refundAll bool) {
+	for _, b := range bets {
+		if refundAll || b.TargetID == exploderID {
+			s.refundTelegramPayment(b.ChargeID, b.BettorID)
+		}
+	}
+}
+
+func (s *Server) refundTelegramPayment(chargeID, userID string) {
+	uid, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		log.Printf("refundTelegramPayment: bad userID %q: %v", userID, err)
+		return
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"user_id":                    uid,
+		"telegram_payment_charge_id": chargeID,
+	})
+
+	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/refundStarPayment"
+	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("refundTelegramPayment error: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if result.OK {
+		s.markBetRefunded(chargeID)
+	} else {
+		log.Printf("refundStarPayment failed chargeID=%s userID=%s", chargeID, userID)
+	}
 }

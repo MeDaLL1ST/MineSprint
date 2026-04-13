@@ -1819,3 +1819,93 @@ html[data-skin="arctic"] .cell[data-adj="8"] { color: #ffffff; }
 
 }
 
+
+/* ── Turn badge ─────────────────────────────────────────── */
+.player-card.turn {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.turn-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  letter-spacing: .3px;
+}
+
+/* ── Bets panel ──────────────────────────────────────────── */
+.bets-panel {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bets-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.bets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bet-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.bet-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.bet-select {
+  flex: 1;
+  min-width: 0;
+  background: var(--input-bg, #1a2035);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  outline: none;
+}
+
+.bet-amount-input {
+  width: 70px;
+  background: var(--input-bg, #1a2035);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  outline: none;
+  text-align: center;
+}
+
+.bet-confirmed {
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+}
