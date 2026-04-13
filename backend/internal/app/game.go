@@ -192,7 +192,7 @@ func (s *Server) joinRoom(c *Client, code string) {
 	room.EmptySince = nil
 	game.LastAction = time.Now()
 
-	stateMsgs := s.buildBroadcastMsgs(game)
+	stateSnaps := s.buildStateSnaps(game)
 	game.mu.Unlock()
 
 	s.send(c, map[string]any{
@@ -200,7 +200,7 @@ func (s *Server) joinRoom(c *Client, code string) {
 		"code":    code,
 		"message": "Вы вошли в комнату " + code,
 	})
-	s.sendBroadcastLocked(stateMsgs)
+	s.sendBroadcastLocked(marshalStateSnaps(stateSnaps))
 }
 
 func (s *Server) leaveRoom(c *Client) {
@@ -362,9 +362,9 @@ func (s *Server) revealCell(c *Client, idx int) {
 				}
 				s.persistLaterLocked(game)
 				bets := append([]GameBet{}, game.Bets...)
-				msgs := s.buildBroadcastMsgs(game)
+				snaps := s.buildStateSnaps(game)
 				game.mu.Unlock()
-				s.sendBroadcast(msgs)
+				s.sendBroadcast(marshalStateSnaps(snaps))
 				go s.recordMove(matchID, c.ID, "explode", 0)
 				go s.resolveBets(bets, c.ID, false)
 				return
@@ -408,9 +408,9 @@ func (s *Server) revealCell(c *Client, idx int) {
 			game.TurnIdx = (game.TurnIdx + 1) % len(game.Players)
 		}
 
-		msgs := s.buildBroadcastMsgs(game)
+		snaps := s.buildStateSnaps(game)
 		game.mu.Unlock()
-		s.sendBroadcast(msgs)
+		s.sendBroadcast(marshalStateSnaps(snaps))
 		go s.recordMove(matchID, c.ID, "reveal", openedCount)
 		if bets != nil {
 			go s.resolveBets(bets, "", true)
@@ -439,9 +439,9 @@ func (s *Server) revealCell(c *Client, idx int) {
 		}
 		s.persistLaterLocked(game)
 		bets := append([]GameBet{}, game.Bets...)
-		msgs := s.buildBroadcastMsgs(game)
+		snaps := s.buildStateSnaps(game)
 		game.mu.Unlock()
-		s.sendBroadcast(msgs)
+		s.sendBroadcast(marshalStateSnaps(snaps))
 		go s.recordMove(matchID, c.ID, "explode", 0)
 		go s.resolveBets(bets, c.ID, false)
 		return
@@ -475,9 +475,9 @@ func (s *Server) revealCell(c *Client, idx int) {
 		game.TurnIdx = (game.TurnIdx + 1) % len(game.Players)
 	}
 
-	msgs := s.buildBroadcastMsgs(game)
+	snaps := s.buildStateSnaps(game)
 	game.mu.Unlock()
-	s.sendBroadcast(msgs)
+	s.sendBroadcast(marshalStateSnaps(snaps))
 	go s.recordMove(matchID, c.ID, "reveal", openedCount)
 	if bets != nil {
 		go s.resolveBets(bets, "", true)
@@ -524,9 +524,9 @@ func (s *Server) revivePlayer(playerID string) error {
 	game.RevivedPlayers[playerID] = true
 	game.LastAction = time.Now()
 
-	msgs := s.buildBroadcastMsgs(game)
+	snaps := s.buildStateSnaps(game)
 	game.mu.Unlock()
-	s.sendBroadcast(msgs)
+	s.sendBroadcast(marshalStateSnaps(snaps))
 	return nil
 }
 
@@ -570,9 +570,9 @@ func (s *Server) toggleFlag(c *Client, idx int) {
 		action = "flag"
 	}
 
-	msgs := s.buildBroadcastMsgs(game)
+	snaps := s.buildStateSnaps(game)
 	game.mu.Unlock()
-	s.sendBroadcast(msgs)
+	s.sendBroadcast(marshalStateSnaps(snaps))
 	go s.recordMove(matchID, c.ID, action, 0)
 }
 
@@ -669,14 +669,14 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		if game.Mode == "versus" && game.TurnIdx >= len(game.Players) {
 			game.TurnIdx = 0
 		}
-		// Build messages while game.mu is held, then unlock and broadcast.
+		// Snapshot while game.mu is held, then unlock and broadcast.
 		hoverMsgs := s.buildHoverMsgs(game, playerID, -1, false)
-		stateMsgs := s.buildBroadcastMsgs(game)
+		stateSnaps := s.buildStateSnaps(game)
 		game.mu.Unlock()
 		delete(s.playerGame, playerID)
 		// s.mu write-lock is held by caller; send directly via s.clients.
 		s.sendBroadcastLocked(hoverMsgs)
-		s.sendBroadcastLocked(stateMsgs)
+		s.sendBroadcastLocked(marshalStateSnaps(stateSnaps))
 		return
 	}
 
@@ -699,11 +699,11 @@ func (s *Server) leaveCurrentGameLocked(playerID string) {
 		game.TurnIdx = 0
 	}
 	hoverMsgs := s.buildHoverMsgs(game, playerID, -1, false)
-	stateMsgs := s.buildBroadcastMsgs(game)
+	stateSnaps := s.buildStateSnaps(game)
 	game.mu.Unlock()
 	delete(s.playerGame, playerID)
 	s.sendBroadcastLocked(hoverMsgs)
-	s.sendBroadcastLocked(stateMsgs)
+	s.sendBroadcastLocked(marshalStateSnaps(stateSnaps))
 }
 
 func (s *Server) buildStateLocked(g *Game, playerID string) State {

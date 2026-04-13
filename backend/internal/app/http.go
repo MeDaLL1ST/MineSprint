@@ -944,10 +944,10 @@ func (s *Server) handleInternalPlaceBet(w http.ResponseWriter, r *http.Request) 
 		Amount:   req.Amount,
 		ChargeID: req.ChargeID,
 	})
-	msgs := s.buildBroadcastMsgs(game)
+	snaps := s.buildStateSnaps(game)
 	game.mu.Unlock()
 
-	s.sendBroadcast(msgs)
+	s.sendBroadcast(marshalStateSnaps(snaps))
 	go s.recordBet(req.GameID, req.BettorID, req.TargetID, req.ChargeID, req.Amount)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

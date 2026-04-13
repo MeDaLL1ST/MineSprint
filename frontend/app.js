@@ -165,6 +165,14 @@ let modeButtons = [];
 let inputButtons = [];
 let resizeTimer = null;
 let prevHoveredIndices = new Set();
+
+// Per-board incremental rendering state.
+// Stores the game ID that was last fully rendered into each container so we
+// can skip a full innerHTML rebuild on subsequent state updates for the same game.
+const boardRenderState = {
+  preview: { gameId: null, cellMap: new Map() },
+  modal:   { gameId: null, cellMap: new Map() },
+};
 const cellTouchTimers = new Map();
 const cellLongPressed = new Map();
 const cellIgnoreClickUntil = new Map();
@@ -178,6 +186,8 @@ let autoJoinDone = false;
 let reconnectTimer = null;
 let remoteHovers = {};
 let lastHoverCell = null;
+let lastHoverSentAt = 0;   // timestamp of the last hover message we actually sent
+let hoverFlushTimer = null; // trailing-edge flush timer
 let frozenElapsedSec = 0;
 let activeSkinId = "default";
 let ownedSkins = ["default"];
@@ -1064,9 +1074,41 @@ function renderBoards() {
   });
 }
 
+// Update a single cell button in-place to match the given cell data.
+// Does NOT touch the "hovered-by-other" class so hover decorations survive
+// incremental re-renders without needing a full rAF flush.
+function updateCellElement(btn, cell) {
+  if (cell.d) {
+    // Inactive cell outside the board shape.
+    btn.className = "cell cell-inactive";
+    btn.tabIndex = -1;
+    btn.textContent = "";
+    delete btn.dataset.adj;
+    return;
+  }
+  btn.tabIndex = 0;
+  btn.classList.remove("cell-inactive");
+  btn.classList.toggle("open",     !!cell.o);
+  btn.classList.toggle("flagged",  !!(cell.f && !cell.o));
+  btn.classList.toggle("mine",     !!(cell.m && (cell.o || state?.over)));
+  btn.classList.toggle("by-me",    !!(cell.by && cell.by === state?.you?.id));
+  btn.classList.toggle("by-other", !!(cell.by && cell.by !== state?.you?.id));
+  if (cell.a) {
+    btn.dataset.adj = String(cell.a);
+  } else {
+    delete btn.dataset.adj;
+  }
+  btn.textContent = getCellText(cell);
+}
+
 function renderBoardTo(container, modal) {
+  const key = modal ? "modal" : "preview";
+  const bst = boardRenderState[key];
+
   if (!state) {
     container.innerHTML = `<div class="empty-state">Выбери режим и начни игру</div>`;
+    bst.gameId = null;
+    bst.cellMap.clear();
     return;
   }
 
@@ -1075,33 +1117,35 @@ function renderBoardTo(container, modal) {
   const cellFont = Math.max(8, Math.round(cellSize * 0.5));
   const gap = cellSize <= 14 ? 2 : cellSize <= 20 ? 3 : 4;
 
+  // Always refresh grid CSS (cell sizes may change on resize even mid-game).
   container.style.setProperty("--cell-size", `${cellSize}px`);
   container.style.setProperty("--cell-font-size", `${cellFont}px`);
   container.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
   container.style.gap = `${gap}px`;
-  container.innerHTML = "";
 
-  state.board.forEach((cell) => {
-    const btn = document.createElement("button");
-    btn.className = "cell";
-    btn.dataset.index = String(cell.i);
+  // Full rebuild when switching to a new game (or first render).
+  if (bst.gameId !== state.gameId) {
+    container.innerHTML = "";
+    bst.cellMap.clear();
+    bst.gameId = state.gameId;
 
-    if (cell.d) {
-      btn.classList.add("cell-inactive");
-      btn.tabIndex = -1;
+    state.board.forEach((cell) => {
+      const btn = document.createElement("button");
+      btn.className = "cell";
+      btn.dataset.index = String(cell.i);
+      updateCellElement(btn, cell);
       container.appendChild(btn);
-      return;
-    }
+      bst.cellMap.set(cell.i, btn);
+    });
+    return;
+  }
 
-    if (cell.o) btn.classList.add("open");
-    if (cell.f && !cell.o) btn.classList.add("flagged");
-    if (cell.m && (cell.o || state.over)) btn.classList.add("mine");
-    if (cell.by && cell.by === state.you.id) btn.classList.add("by-me");
-    if (cell.by && cell.by !== state.you.id) btn.classList.add("by-other");
-    if (cell.a) btn.dataset.adj = String(cell.a);
-
-    btn.textContent = getCellText(cell);
-    container.appendChild(btn);
+  // Incremental update: touch only the cells that need it.
+  // classList.toggle is essentially free when the class state hasn't changed,
+  // so we iterate the full board without an explicit diff.
+  state.board.forEach((cell) => {
+    const btn = bst.cellMap.get(cell.i);
+    if (btn) updateCellElement(btn, cell);
   });
 }
 
@@ -1237,14 +1281,35 @@ function toggleFlag(cellIndex) {
   send({ type: "toggle_flag", cell: cellIndex });
 }
 
+const HOVER_THROTTLE_MS = 50;
+
 function sendHoverCell(cellIndex) {
   if (!state?.online || state.over) return;
   if (lastHoverCell === cellIndex) return;
   lastHoverCell = cellIndex;
-  send({ type: "hover", cell: cellIndex });
+
+  const now = Date.now();
+  if (now - lastHoverSentAt >= HOVER_THROTTLE_MS) {
+    // Enough time has passed — send immediately (leading edge).
+    lastHoverSentAt = now;
+    clearTimeout(hoverFlushTimer);
+    hoverFlushTimer = null;
+    send({ type: "hover", cell: cellIndex });
+  } else if (!hoverFlushTimer) {
+    // Rate-limited — schedule a trailing-edge flush so the final position
+    // always gets delivered after the throttle window expires.
+    const delay = HOVER_THROTTLE_MS - (now - lastHoverSentAt);
+    hoverFlushTimer = setTimeout(() => {
+      hoverFlushTimer = null;
+      lastHoverSentAt = Date.now();
+      send({ type: "hover", cell: lastHoverCell });
+    }, delay);
+  }
 }
 
 function clearHoverCell(silent = false) {
+  clearTimeout(hoverFlushTimer);
+  hoverFlushTimer = null;
   if (lastHoverCell === null) return;
   lastHoverCell = null;
   if (!silent && state?.online && !state.over) {

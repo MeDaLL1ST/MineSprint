@@ -177,21 +177,45 @@ type playerMsg struct {
 	msg []byte
 }
 
-// buildBroadcastMsgs builds per-player state messages from g.
-// Caller must hold g.mu (or exclusive s.mu so no hot-path can mutate g).
-func (s *Server) buildBroadcastMsgs(g *Game) []playerMsg {
-	msgs := make([]playerMsg, 0, len(g.Players))
+// playerStateSnap holds a pre-built State for one player, not yet JSON-encoded.
+type playerStateSnap struct {
+	pid   string
+	state State
+}
+
+// buildStateSnaps builds per-player State objects from g.
+// Caller must hold g.mu. JSON marshalling is deferred to marshalStateSnaps so
+// the expensive encoding step happens outside the lock.
+func (s *Server) buildStateSnaps(g *Game) []playerStateSnap {
+	snaps := make([]playerStateSnap, 0, len(g.Players))
 	for _, pid := range g.Players {
+		snaps = append(snaps, playerStateSnap{pid: pid, state: s.buildStateLocked(g, pid)})
+	}
+	return snaps
+}
+
+// marshalStateSnaps encodes snapshots to JSON playerMsg values.
+// Safe to call without any lock held.
+func marshalStateSnaps(snaps []playerStateSnap) []playerMsg {
+	msgs := make([]playerMsg, 0, len(snaps))
+	for _, snap := range snaps {
 		data, err := json.Marshal(map[string]any{
 			"type":    "state",
-			"payload": s.buildStateLocked(g, pid),
+			"payload": snap.state,
 		})
 		if err != nil {
 			continue
 		}
-		msgs = append(msgs, playerMsg{pid: pid, msg: data})
+		msgs = append(msgs, playerMsg{pid: snap.pid, msg: data})
 	}
 	return msgs
+}
+
+// buildBroadcastMsgs builds per-player state messages from g.
+// Caller must hold g.mu (or exclusive s.mu so no hot-path can mutate g).
+// Prefer buildStateSnaps+marshalStateSnaps to keep JSON work outside the lock.
+func (s *Server) buildBroadcastMsgs(g *Game) []playerMsg {
+	return marshalStateSnaps(s.buildStateSnaps(g))
 }
 
 // buildHoverMsgs builds hover-notification messages for all players in g.
@@ -415,9 +439,9 @@ func (s *Server) purchaseSkinForPlayer(playerID, skinID string) error {
 			game.Skins = map[string]string{}
 		}
 		game.Skins[playerID] = skinID
-		msgs := s.buildBroadcastMsgs(game)
+		snaps := s.buildStateSnaps(game)
 		game.mu.Unlock()
-		s.sendBroadcast(msgs)
+		s.sendBroadcast(marshalStateSnaps(snaps))
 	} else {
 		s.send(c, map[string]any{
 			"type":       "skin_purchased",
@@ -606,9 +630,9 @@ func (s *Server) handleSelectSkin(c *Client, skinID string) {
 			game.Skins = map[string]string{}
 		}
 		game.Skins[c.ID] = skinID
-		msgs := s.buildBroadcastMsgs(game)
+		snaps := s.buildStateSnaps(game)
 		game.mu.Unlock()
-		s.sendBroadcast(msgs)
+		s.sendBroadcast(marshalStateSnaps(snaps))
 	} else {
 		// No active game — just confirm back to the client
 		s.send(c, map[string]any{
