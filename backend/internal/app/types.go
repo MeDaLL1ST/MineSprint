@@ -16,6 +16,8 @@ type Client struct {
 	ActiveSkin      string
 	OwnedSkins      []string
 	OwnedShapes     []string
+	OwnedSkinSet    map[string]bool
+	OwnedShapeSet   map[string]bool
 	HasSubscription bool
 	IsPrivileged    bool
 }

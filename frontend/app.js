@@ -158,6 +158,14 @@ const els = {
   boardCard: document.querySelector(".board-card"),
 };
 
+let modeButtons = [];
+let inputButtons = [];
+let resizeTimer = null;
+let prevHoveredIndices = new Set();
+const cellTouchTimers = new Map();
+const cellLongPressed = new Map();
+const cellIgnoreClickUntil = new Map();
+
 let ws = null;
 let state = null;
 let adminStats = null;
@@ -232,7 +240,8 @@ function resolveTelegramUser() {
 }
 
 function bindUI() {
-  document.querySelectorAll("[data-mode]").forEach((btn) => {
+  modeButtons = [...document.querySelectorAll("[data-mode]")];
+  modeButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       selectedMode = btn.dataset.mode;
       applyPresetIfNeeded();
@@ -240,7 +249,8 @@ function bindUI() {
     });
   });
 
-  document.querySelectorAll("[data-input]").forEach((btn) => {
+  inputButtons = [...document.querySelectorAll("[data-input]")];
+  inputButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       toggleInputMode();
     });
@@ -388,9 +398,15 @@ function bindUI() {
   els.boardPreview.addEventListener("contextmenu", (e) => e.preventDefault());
 
   window.addEventListener("resize", () => {
-    renderBoards();
-    updateTopCounters();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      renderBoards();
+      updateTopCounters();
+    }, 200);
   });
+
+  setupBoardDelegation(els.boardPreview);
+  setupBoardDelegation(els.boardModal);
 }
 
 function sanitizeNumericInput(input) {
@@ -796,11 +812,11 @@ function render() {
 }
 
 function renderModeButtons() {
-  document.querySelectorAll("[data-mode]").forEach((btn) => {
+  modeButtons.forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.mode === selectedMode);
   });
 
-  document.querySelectorAll("[data-input]").forEach((btn) => {
+  inputButtons.forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.input === inputMode);
   });
 
@@ -981,94 +997,110 @@ function renderBoardTo(container, modal) {
     if (cell.a) btn.dataset.adj = String(cell.a);
 
     btn.textContent = getCellText(cell);
-    wireCellButton(btn, cell.i);
     container.appendChild(btn);
   });
 }
 
-function wireCellButton(btn, cellIndex) {
-  btn.addEventListener("mouseenter", () => {
-    sendHoverCell(cellIndex);
+function setupBoardDelegation(container) {
+  container.addEventListener("mouseover", (e) => {
+    const btn = e.target.closest(".cell[data-index]");
+    if (!btn || btn.classList.contains("cell-inactive")) return;
+    sendHoverCell(Number(btn.dataset.index));
   });
 
-  btn.addEventListener("click", (e) => {
-    if (Date.now() < suppressTapUntil || Date.now() < (btn._ignoreClickUntil || 0)) {
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest(".cell[data-index]");
+    if (!btn || btn.classList.contains("cell-inactive")) return;
+    const idx = Number(btn.dataset.index);
+    if (Date.now() < suppressTapUntil || Date.now() < (cellIgnoreClickUntil.get(idx) || 0)) {
       e.preventDefault();
       return;
     }
     if (state?.over) return;
-    handlePrimaryAction(cellIndex);
+    handlePrimaryAction(idx);
   });
 
-  btn.addEventListener("contextmenu", (e) => {
+  container.addEventListener("contextmenu", (e) => {
+    const btn = e.target.closest(".cell[data-index]");
+    if (!btn || btn.classList.contains("cell-inactive")) return;
     e.preventDefault();
     if (state?.over) return;
-    toggleFlag(cellIndex);
+    toggleFlag(Number(btn.dataset.index));
   });
 
-  btn.addEventListener(
+  container.addEventListener(
     "touchstart",
     (e) => {
+      const btn = e.target.closest(".cell[data-index]");
+      if (!btn || btn.classList.contains("cell-inactive")) return;
       if (state?.over) return;
       if (e.touches.length > 1) return;
 
       e.preventDefault();
-      sendHoverCell(cellIndex);
-      btn._longPressTriggered = false;
-      clearButtonTouchTimer(btn);
+      const idx = Number(btn.dataset.index);
+      sendHoverCell(idx);
+      cellLongPressed.set(idx, false);
+      clearCellTouchTimer(idx);
 
       const timer = setTimeout(() => {
         activeTouchTimers.delete(timer);
-        btn._touchTimer = null;
+        cellTouchTimers.delete(idx);
 
         if (pinchGesture || (panGesture && panGesture.active) || state?.over) return;
 
-        btn._longPressTriggered = true;
-        btn._ignoreClickUntil = Date.now() + 500;
-        toggleFlag(cellIndex);
+        cellLongPressed.set(idx, true);
+        cellIgnoreClickUntil.set(idx, Date.now() + 500);
+        toggleFlag(idx);
         impact("medium");
       }, LONG_PRESS_MS);
 
-      btn._touchTimer = timer;
+      cellTouchTimers.set(idx, timer);
       activeTouchTimers.add(timer);
     },
     { passive: false }
   );
 
-  btn.addEventListener(
+  container.addEventListener(
     "touchend",
     (e) => {
+      const btn = e.target.closest(".cell[data-index]");
+      if (!btn || btn.classList.contains("cell-inactive")) return;
+      const idx = Number(btn.dataset.index);
+
       clearHoverCell();
 
-      if (btn._longPressTriggered || Date.now() < suppressTapUntil || pinchGesture || (panGesture && panGesture.active)) {
-        clearButtonTouchTimer(btn);
-        btn._ignoreClickUntil = Date.now() + 500;
+      if (cellLongPressed.get(idx) || Date.now() < suppressTapUntil || pinchGesture || (panGesture && panGesture.active)) {
+        clearCellTouchTimer(idx);
+        cellIgnoreClickUntil.set(idx, Date.now() + 500);
         e.preventDefault();
         return;
       }
 
-      clearButtonTouchTimer(btn);
-      btn._ignoreClickUntil = Date.now() + 500;
+      clearCellTouchTimer(idx);
+      cellIgnoreClickUntil.set(idx, Date.now() + 500);
 
       if (!state?.over) {
-        handlePrimaryAction(cellIndex);
+        handlePrimaryAction(idx);
       }
       e.preventDefault();
     },
     { passive: false }
   );
 
-  btn.addEventListener("touchcancel", () => {
-    clearButtonTouchTimer(btn);
+  container.addEventListener("touchcancel", (e) => {
+    const btn = e.target.closest(".cell[data-index]");
+    if (!btn) return;
+    clearCellTouchTimer(Number(btn.dataset.index));
     clearHoverCell();
   });
 }
 
-function clearButtonTouchTimer(btn) {
-  if (!btn?._touchTimer) return;
-  clearTimeout(btn._touchTimer);
-  activeTouchTimers.delete(btn._touchTimer);
-  btn._touchTimer = null;
+function clearCellTouchTimer(idx) {
+  const timer = cellTouchTimers.get(idx);
+  if (!timer) return;
+  clearTimeout(timer);
+  activeTouchTimers.delete(timer);
+  cellTouchTimers.delete(idx);
 }
 
 function cancelAllTouchTimers() {
@@ -1581,17 +1613,31 @@ function getCellText(cell) {
 
 function applyHoverDecorations() {
   const hovered = new Set();
-
   Object.entries(remoteHovers || {}).forEach(([playerId, cell]) => {
-    if (playerId === state?.you?.id) return;
-    if (Number.isInteger(cell) && cell >= 0) {
+    if (playerId !== state?.you?.id && Number.isInteger(cell) && cell >= 0) {
       hovered.add(String(cell));
     }
   });
 
-  document.querySelectorAll(".cell[data-index]").forEach((cellEl) => {
-    cellEl.classList.toggle("hovered-by-other", hovered.has(cellEl.dataset.index));
+  // Remove decoration only from cells no longer hovered
+  prevHoveredIndices.forEach((idx) => {
+    if (!hovered.has(idx)) {
+      document.querySelectorAll(`.cell[data-index="${idx}"]`).forEach((el) => {
+        el.classList.remove("hovered-by-other");
+      });
+    }
   });
+
+  // Add decoration only to newly hovered cells
+  hovered.forEach((idx) => {
+    if (!prevHoveredIndices.has(idx)) {
+      document.querySelectorAll(`.cell[data-index="${idx}"]`).forEach((el) => {
+        el.classList.add("hovered-by-other");
+      });
+    }
+  });
+
+  prevHoveredIndices = hovered;
 }
 
 function prettyMode(mode) {

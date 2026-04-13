@@ -927,12 +927,7 @@ func (s *Server) canUseShape(c *Client, shapeID string) bool {
 	if c.ID == s.cfg.AdminTGID || c.IsPrivileged || c.HasSubscription {
 		return true
 	}
-	for _, owned := range c.OwnedShapes {
-		if owned == shapeID {
-			return true
-		}
-	}
-	return false
+	return c.OwnedShapeSet[shapeID]
 }
 
 func newGame(mode, shape string, rows, cols, mines int, players []string, names map[string]string, skins map[string]string) *Game {

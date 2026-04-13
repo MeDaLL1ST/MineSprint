@@ -78,7 +78,9 @@ func (s *Server) registerClient(c *Client) {
 	ctx := context.Background()
 	c.ActiveSkin = s.getUserActiveSkin(ctx, c.ID)
 	c.OwnedSkins = s.getUserOwnedSkins(ctx, c.ID)
+	c.OwnedSkinSet = makeStringSet(c.OwnedSkins)
 	c.OwnedShapes = s.getUserOwnedShapes(ctx, c.ID)
+	c.OwnedShapeSet = makeStringSet(c.OwnedShapes)
 	c.HasSubscription = s.isUserSubscribed(ctx, c.ID)
 	c.IsPrivileged = s.isUserPrivileged(ctx, c.ID)
 
@@ -321,6 +323,7 @@ func (s *Server) adminGrantShape(userID, shapeID string) error {
 	s.mu.RUnlock()
 	if c != nil {
 		c.OwnedShapes = s.getUserOwnedShapes(ctx, userID)
+		c.OwnedShapeSet = makeStringSet(c.OwnedShapes)
 		s.send(c, map[string]any{
 			"type":        "shape_purchased",
 			"shapeId":     shapeID,
@@ -361,6 +364,7 @@ func (s *Server) adminGrantSkin(userID, skinID string) error {
 	s.mu.RUnlock()
 	if c != nil {
 		c.OwnedSkins = s.getUserOwnedSkins(ctx, userID)
+		c.OwnedSkinSet = makeStringSet(c.OwnedSkins)
 		s.send(c, map[string]any{
 			"type":       "skin_purchased",
 			"activeSkin": c.ActiveSkin,
@@ -386,6 +390,7 @@ func (s *Server) purchaseSkinForPlayer(playerID, skinID string) error {
 	}
 
 	c.OwnedSkins = s.getUserOwnedSkins(ctx, playerID)
+	c.OwnedSkinSet = makeStringSet(c.OwnedSkins)
 	c.ActiveSkin = skinID
 
 	// Update in current game
@@ -417,6 +422,16 @@ func (s *Server) purchaseSkinForPlayer(playerID, skinID string) error {
 	return nil
 }
 
+var telegramClient = &http.Client{Timeout: 10 * time.Second}
+
+func makeStringSet(slice []string) map[string]bool {
+	set := make(map[string]bool, len(slice))
+	for _, s := range slice {
+		set[s] = true
+	}
+	return set
+}
+
 var shapeNames = map[string]string{
 	"circle":  "Круг",
 	"diamond": "Ромб",
@@ -439,12 +454,9 @@ func (s *Server) handleShapePurchaseRequest(c *Client, shapeID string) {
 		s.sendError(c, "Форма уже доступна с вашей подпиской")
 		return
 	}
-	// Check if already owned
-	for _, owned := range c.OwnedShapes {
-		if owned == shapeID {
-			s.sendError(c, "Форма уже куплена")
-			return
-		}
+	if c.OwnedShapeSet[shapeID] {
+		s.sendError(c, "Форма уже куплена")
+		return
 	}
 
 	url, err := s.createShapeInvoiceLink(shapeID, c.ID)
@@ -481,7 +493,7 @@ func (s *Server) createShapeInvoiceLink(shapeID, playerID string) (string, error
 	}
 
 	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
-	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -515,6 +527,7 @@ func (s *Server) purchaseShapeForPlayer(playerID, shapeID string) error {
 	}
 
 	c.OwnedShapes = s.getUserOwnedShapes(ctx, playerID)
+	c.OwnedShapeSet = makeStringSet(c.OwnedShapes)
 	s.send(c, map[string]any{
 		"type":        "shape_purchased",
 		"shapeId":     shapeID,
@@ -537,12 +550,9 @@ func (s *Server) handleSkinPurchaseRequest(c *Client, skinID string) {
 		return
 	}
 
-	// Check if already owned
-	for _, owned := range c.OwnedSkins {
-		if owned == skinID {
-			s.sendError(c, "Скин уже куплен")
-			return
-		}
+	if c.OwnedSkinSet[skinID] {
+		s.sendError(c, "Скин уже куплен")
+		return
 	}
 
 	url, err := s.createSkinInvoiceLink(skinID, c.ID)
@@ -565,14 +575,7 @@ func (s *Server) handleSelectSkin(c *Client, skinID string) {
 
 	// Validate ownership (default always free; admin bypasses ownership check)
 	if skinID != "default" && c.ID != s.cfg.AdminTGID {
-		owned := false
-		for _, owned_skin := range c.OwnedSkins {
-			if owned_skin == skinID {
-				owned = true
-				break
-			}
-		}
-		if !owned {
+		if !c.OwnedSkinSet[skinID] {
 			s.sendError(c, "Скин не куплен")
 			return
 		}
@@ -644,7 +647,7 @@ func (s *Server) createSubscriptionInvoiceLink(playerID string) (string, error) 
 	}
 
 	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
-	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -688,7 +691,7 @@ func (s *Server) createSkinInvoiceLink(skinID, playerID string) (string, error) 
 	}
 
 	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
-	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -723,7 +726,7 @@ func (s *Server) createInvoiceLink(gameID, playerID string) (string, error) {
 	}
 
 	apiURL := "https://api.telegram.org/bot" + s.cfg.BotToken + "/createInvoiceLink"
-	resp, err := http.Post(apiURL, "application/json", bytes.NewReader(reqBody))
+	resp, err := telegramClient.Post(apiURL, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}

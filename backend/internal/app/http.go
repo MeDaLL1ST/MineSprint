@@ -59,17 +59,23 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var totalUsers int
-	var active7d int
-	var totalMatches int
-	var totalMoves int
+	var totalUsers, active7d, totalMatches, totalMoves int
 	var avgDuration float64
+	var totalRevives, totalSubscriptions, activeSubscriptions, privilegedCount int
 
-	_ = s.db.QueryRow(r.Context(), `select count(*) from users`).Scan(&totalUsers)
-	_ = s.db.QueryRow(r.Context(), `select count(*) from users where last_seen > now() - interval '7 days'`).Scan(&active7d)
-	_ = s.db.QueryRow(r.Context(), `select count(*) from matches`).Scan(&totalMatches)
-	_ = s.db.QueryRow(r.Context(), `select count(*) from move_events`).Scan(&totalMoves)
-	_ = s.db.QueryRow(r.Context(), `select coalesce(avg(duration_sec), 0) from matches`).Scan(&avgDuration)
+	_ = s.db.QueryRow(r.Context(), `
+		select
+			(select count(*) from users),
+			(select count(*) from users where last_seen > now() - interval '7 days'),
+			(select count(*) from matches),
+			(select count(*) from move_events),
+			(select coalesce(avg(duration_sec), 0) from matches),
+			(select count(*) from purchases where type = 'revive'),
+			(select count(*) from purchases where type = 'subscription'),
+			(select count(*) from subscriptions where expires_at > now()),
+			(select count(*) from privileged_users)
+	`).Scan(&totalUsers, &active7d, &totalMatches, &totalMoves, &avgDuration,
+		&totalRevives, &totalSubscriptions, &activeSubscriptions, &privilegedCount)
 
 	modeRows, err := s.db.Query(r.Context(), `select mode, count(*)::int from matches group by mode`)
 	if err != nil {
@@ -112,18 +118,6 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-
-	var totalRevives int
-	_ = s.db.QueryRow(r.Context(), `select count(*) from purchases where type = 'revive'`).Scan(&totalRevives)
-
-	var totalSubscriptions int
-	_ = s.db.QueryRow(r.Context(), `select count(*) from purchases where type = 'subscription'`).Scan(&totalSubscriptions)
-
-	var activeSubscriptions int
-	_ = s.db.QueryRow(r.Context(), `select count(*) from subscriptions where expires_at > now()`).Scan(&activeSubscriptions)
-
-	var privilegedCount int
-	_ = s.db.QueryRow(r.Context(), `select count(*) from privileged_users`).Scan(&privilegedCount)
 
 	skinRows, err := s.db.Query(r.Context(), `select skin_id, count(*)::int from purchases where type = 'skin' group by skin_id`)
 	if err != nil {
@@ -679,6 +673,7 @@ func (s *Server) handleAdminRevokeSkin(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if c != nil {
 		c.OwnedSkins = s.getUserOwnedSkins(ctx, req.UserID)
+		c.OwnedSkinSet = makeStringSet(c.OwnedSkins)
 		if c.ActiveSkin == req.SkinID {
 			c.ActiveSkin = "default"
 		}
@@ -863,6 +858,7 @@ func (s *Server) handleAdminRevokeShape(w http.ResponseWriter, r *http.Request) 
 	s.mu.RUnlock()
 	if c != nil {
 		c.OwnedShapes = s.getUserOwnedShapes(ctx, req.UserID)
+		c.OwnedShapeSet = makeStringSet(c.OwnedShapes)
 		s.send(c, map[string]any{
 			"type":        "shape_revoked",
 			"shapeId":     req.ShapeID,
