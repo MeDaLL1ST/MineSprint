@@ -51,6 +51,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	go s.writeLoop(client)
 
+	starCredits := s.getStarCredits(context.Background(), client.ID)
+
 	s.send(client, map[string]any{
 		"type": "hello",
 		"user": map[string]any{
@@ -64,6 +66,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		"hasSubscription": client.HasSubscription,
 		"isPrivileged":    client.IsPrivileged,
 		"isAdmin":         client.ID == s.cfg.AdminTGID,
+		"starCredits":     starCredits,
 	})
 
 	for {
@@ -846,14 +849,78 @@ func (s *Server) createBetInvoiceLink(gameID, bettorID, targetID string, amount 
 }
 
 // resolveBets is called in a goroutine after a game ends.
-// If exploderID is set, refund bets whose target was the exploder.
-// If refundAll is true, refund every bet (board cleared).
+//
+// Board cleared (refundAll=true): everyone gets their stake refunded.
+//
+// Mine hit (exploderID set):
+//   - Correct predictors (bet on exploderID): stake refunded + 80% of losers'
+//     total distributed as star_credits proportional to each winner's stake.
+//   - Wrong predictors: lose their stars (admin keeps them as broker profit).
+//   - Admin earns: 20% of losers' total (never refunded to anyone).
 func (s *Server) resolveBets(bets []GameBet, exploderID string, refundAll bool) {
-	for _, b := range bets {
-		if refundAll || b.TargetID == exploderID {
+	if len(bets) == 0 {
+		return
+	}
+
+	if refundAll {
+		for _, b := range bets {
 			s.refundTelegramPayment(b.ChargeID, b.BettorID)
 		}
+		return
 	}
+
+	var winners []GameBet
+	losersTotal := 0
+	for _, b := range bets {
+		if b.TargetID == exploderID {
+			winners = append(winners, b)
+		} else {
+			losersTotal += b.Amount
+		}
+	}
+
+	// Refund every winner's stake
+	for _, b := range winners {
+		s.refundTelegramPayment(b.ChargeID, b.BettorID)
+	}
+
+	// Distribute 80% of losers' pool to winners as star_credits (proportional to stake)
+	if len(winners) > 0 && losersTotal > 0 {
+		pool := losersTotal * 80 / 100
+		if pool < 1 {
+			pool = 1
+		}
+		winnersTotal := 0
+		for _, b := range winners {
+			winnersTotal += b.Amount
+		}
+		for _, b := range winners {
+			if winnersTotal == 0 {
+				break
+			}
+			share := pool * b.Amount / winnersTotal
+			if share < 1 {
+				share = 1
+			}
+			s.addStarCredits(b.BettorID, share)
+			s.notifyCreditsUpdate(b.BettorID, share)
+		}
+	}
+}
+
+func (s *Server) notifyCreditsUpdate(userID string, earned int) {
+	s.mu.RLock()
+	c := s.clients[userID]
+	s.mu.RUnlock()
+	if c == nil {
+		return
+	}
+	balance := s.getStarCredits(context.Background(), userID)
+	s.send(c, map[string]any{
+		"type":        "credits_updated",
+		"starCredits": balance,
+		"earned":      earned,
+	})
 }
 
 func (s *Server) refundTelegramPayment(chargeID, userID string) {

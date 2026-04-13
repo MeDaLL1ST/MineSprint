@@ -155,6 +155,7 @@ const els = {
   toggleChordCheckbox: $("#toggleChordCheckbox"),
   fieldSizeHint: $("#fieldSizeHint"),
   betsPanel: $("#betsPanel"),
+  starCreditsDisplay: $("#starCreditsDisplay"),
 
   toast: $("#toast"),
   boardCard: document.querySelector(".board-card"),
@@ -192,6 +193,7 @@ let subPurchasePending = false;
 let showMineCounter = true;
 let chordEnabled = true;
 let betPending = false;
+let starCredits = 0;
 
 let modalScale = 1;
 let modalOffsetX = 0;
@@ -555,8 +557,10 @@ function handleMessage(msg) {
     hasSubscription = !!msg.hasSubscription;
     isPrivileged = !!msg.isPrivileged;
     isAdmin = !!msg.isAdmin;
+    if (typeof msg.starCredits === "number") starCredits = msg.starCredits;
     renderProStatus();
     renderShapeSelector();
+    renderCredits();
     if (isAdmin) {
       els.adminSection.classList.remove("hidden");
       loadAdminStats();
@@ -762,6 +766,16 @@ function handleMessage(msg) {
         }
       }
     });
+    return;
+  }
+
+  if (msg.type === "credits_updated") {
+    starCredits = msg.starCredits ?? starCredits;
+    renderCredits();
+    if (msg.earned > 0) {
+      toast(`+${msg.earned} ⭐ кредитов — ставка выиграла!`);
+      impact("medium");
+    }
     return;
   }
 
@@ -1024,6 +1038,17 @@ function renderBettingPanel() {
       send({ type: "bet_request", targetId, amount });
       impact("light");
     });
+  }
+}
+
+function renderCredits() {
+  const el = els.starCreditsDisplay;
+  if (!el) return;
+  if (starCredits > 0) {
+    el.textContent = `⭐ ${starCredits} кредитов`;
+    el.classList.remove("hidden");
+  } else {
+    el.classList.add("hidden");
   }
 }
 

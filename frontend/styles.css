@@ -1909,3 +1909,16 @@ html[data-skin="arctic"] .cell[data-adj="8"] { color: #ffffff; }
   color: var(--accent);
   font-weight: 600;
 }
+
+/* ── Star credits display ────────────────────────────────── */
+.star-credits-display {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #f4b400;
+  background: rgba(244, 180, 0, 0.1);
+  border: 1px solid rgba(244, 180, 0, 0.3);
+  border-radius: 8px;
+  padding: 6px 10px;
+  text-align: center;
+}

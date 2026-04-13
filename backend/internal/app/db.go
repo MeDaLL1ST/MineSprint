@@ -123,6 +123,12 @@ create table if not exists game_bets (
   refunded bool not null default false,
   created_at timestamptz not null default now()
 );
+
+create table if not exists star_credits (
+  user_id text primary key references users(id) on delete cascade,
+  balance int not null default 0,
+  updated_at timestamptz not null default now()
+);
 `
 	_, err := db.Exec(ctx, sql)
 	return err
@@ -480,6 +486,37 @@ func (s *Server) markBetRefunded(chargeID string) {
 		`update game_bets set refunded = true where charge_id = $1`,
 		chargeID,
 	)
+}
+
+func (s *Server) getStarCredits(ctx context.Context, userID string) int {
+	var balance int
+	_ = s.db.QueryRow(ctx,
+		`select coalesce(balance, 0) from star_credits where user_id = $1`,
+		userID,
+	).Scan(&balance)
+	return balance
+}
+
+func (s *Server) addStarCredits(userID string, amount int) {
+	_, _ = s.db.Exec(context.Background(),
+		`insert into star_credits (user_id, balance, updated_at)
+         values ($1, $2, now())
+         on conflict (user_id) do update
+         set balance = star_credits.balance + excluded.balance,
+             updated_at = now()`,
+		userID, amount,
+	)
+}
+
+func (s *Server) spendStarCredits(ctx context.Context, userID string, amount int) (int, error) {
+	var newBalance int
+	err := s.db.QueryRow(ctx,
+		`update star_credits set balance = greatest(0, balance - $2), updated_at = now()
+         where user_id = $1
+         returning balance`,
+		userID, amount,
+	).Scan(&newBalance)
+	return newBalance, err
 }
 
 func (s *Server) purchaseShapeDB(ctx context.Context, userID, shapeID string) error {

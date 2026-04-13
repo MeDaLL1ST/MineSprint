@@ -112,18 +112,20 @@ func main() {
 			continue
 		}
 
+		lang := update.Message.From.LanguageCode
+
 		if update.Message.IsCommand() {
 			switch update.Message.Command() {
 			case "start", "app":
 				roomCode := parseRoomCode(update.Message.CommandArguments())
-				sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, roomCode)
+				sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, roomCode, lang)
 				continue
 			}
 		}
 
 		text := strings.TrimSpace(update.Message.Text)
 		if text != "" {
-			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "")
+			sendOpenApp(bot, update.Message.Chat.ID, cfg.PublicBaseURL, "", lang)
 		}
 	}
 }
@@ -256,17 +258,57 @@ func buildAppURL(baseURL, roomCode string) string {
 	return baseURL + "/?room=" + url.QueryEscape(roomCode)
 }
 
-func sendOpenApp(bot *tgbotapi.BotAPI, chatID int64, baseURL, roomCode string) {
-	appURL := buildAppURL(baseURL, roomCode)
+// langs holds all user-visible strings keyed by language code.
+// Add new languages by adding an entry; "en" is the fallback.
+var langs = map[string]map[string]string{
+	"ru": {
+		"open_game":        "Запусти игру кнопкой ниже.",
+		"open_game_room":   "Запусти игру и зайди в комнату %s.",
+		"btn_open":         "Открыть MineSprint",
+	},
+	"en": {
+		"open_game":        "Open the game with the button below.",
+		"open_game_room":   "Open the game and join room %s.",
+		"btn_open":         "Open MineSprint",
+	},
+}
 
-	text := "Запусти игру кнопкой ниже."
+func t(lang, key string, args ...any) string {
+	m, ok := langs[lang]
+	if !ok {
+		m = langs["en"]
+	}
+	s, ok := m[key]
+	if !ok {
+		s = langs["en"][key]
+	}
+	if len(args) > 0 {
+		s = fmt.Sprintf(s, args...)
+	}
+	return s
+}
+
+func userLang(langCode string) string {
+	if _, ok := langs[langCode]; ok {
+		return langCode
+	}
+	return "en"
+}
+
+func sendOpenApp(bot *tgbotapi.BotAPI, chatID int64, baseURL, roomCode, langCode string) {
+	appURL := buildAppURL(baseURL, roomCode)
+	lang := userLang(langCode)
+
+	var text string
 	if roomCode != "" {
-		text = "Запусти игру и зайди в комнату " + roomCode + "."
+		text = t(lang, "open_game_room", roomCode)
+	} else {
+		text = t(lang, "open_game")
 	}
 
 	markup := webAppKeyboard{
 		InlineKeyboard: [][]webAppButton{{
-			{Text: "Открыть MineSweeper", WebApp: &webAppInfo{URL: appURL}},
+			{Text: t(lang, "btn_open"), WebApp: &webAppInfo{URL: appURL}},
 		}},
 	}
 
