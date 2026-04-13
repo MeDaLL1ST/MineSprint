@@ -152,6 +152,7 @@ const els = {
 
   toggleMinesCheckbox: $("#toggleMinesCheckbox"),
   minesToggleLabel: $("#minesToggleLabel"),
+  toggleChordCheckbox: $("#toggleChordCheckbox"),
   fieldSizeHint: $("#fieldSizeHint"),
 
   toast: $("#toast"),
@@ -188,6 +189,7 @@ let isAdmin = false;
 let subPurchasePending = false;
 
 let showMineCounter = true;
+let chordEnabled = true;
 
 let modalScale = 1;
 let modalOffsetX = 0;
@@ -369,6 +371,10 @@ function bindUI() {
   els.toggleMinesCheckbox.addEventListener("change", () => {
     showMineCounter = els.toggleMinesCheckbox.checked;
     document.body.classList.toggle("hide-mines", !showMineCounter);
+  });
+
+  els.toggleChordCheckbox.addEventListener("change", () => {
+    chordEnabled = els.toggleChordCheckbox.checked;
   });
 
   els.openAdminBtn.addEventListener("click", openAdminModal);
@@ -1118,6 +1124,10 @@ function handlePrimaryAction(cellIndex) {
 }
 
 function openCell(cellIndex) {
+  if (!chordEnabled) {
+    const cell = state?.board?.[cellIndex];
+    if (cell?.o && !cell?.m && (cell?.a ?? 0) > 0) return;
+  }
   send({ type: "reveal", cell: cellIndex });
 }
 

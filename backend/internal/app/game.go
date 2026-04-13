@@ -311,6 +311,94 @@ func (s *Server) revealCell(c *Client, idx int) {
 	}
 
 	cell := &game.Board[idx]
+
+	// Chord: click on an already-opened numbered cell.
+	// If the number of adjacent flags matches the cell's mine count,
+	// all non-flagged unopened neighbours are revealed automatically.
+	if cell.Opened && !cell.Mine && cell.Adj > 0 {
+		nbs := neighbors(game.Rows, game.Cols, idx)
+
+		flagCount := 0
+		for _, nb := range nbs {
+			if game.Board[nb].Flagged {
+				flagCount++
+			}
+		}
+
+		if flagCount != cell.Adj {
+			game.mu.Unlock()
+			return
+		}
+
+		matchID := game.ID
+
+		// Any unflagged non-opened neighbour that is a mine ends the game.
+		for _, nb := range nbs {
+			nbCell := &game.Board[nb]
+			if nbCell.Opened || nbCell.Flagged || nbCell.Inactive {
+				continue
+			}
+			if nbCell.Mine {
+				nbCell.Opened = true
+				nbCell.OpenedBy = c.ID
+				game.Over = true
+				game.EndedAt = time.Now()
+				game.EndReason = "mine"
+				switch game.Mode {
+				case "versus":
+					game.WinnerID = determineVersusWinner(game, c.ID)
+				default:
+					game.WinnerID = ""
+				}
+				s.persistLaterLocked(game)
+				msgs := s.buildBroadcastMsgs(game)
+				game.mu.Unlock()
+				s.sendBroadcast(msgs)
+				go s.recordMove(matchID, c.ID, "explode", 0)
+				return
+			}
+		}
+
+		// No mines — open all safe unflagged neighbours (with cascade).
+		openedCount := 0
+		for _, nb := range nbs {
+			nbCell := &game.Board[nb]
+			if nbCell.Opened || nbCell.Flagged || nbCell.Inactive {
+				continue
+			}
+			openedCount += floodOpen(game, nb, c.ID)
+		}
+
+		if openedCount <= 0 {
+			game.mu.Unlock()
+			return
+		}
+
+		game.OpenedSafe += openedCount
+		game.Scores[c.ID] += openedCount
+
+		if game.OpenedSafe == game.TotalSafe {
+			game.Over = true
+			game.EndedAt = time.Now()
+			game.EndReason = "clear"
+			switch game.Mode {
+			case "solo":
+				game.WinnerID = c.ID
+			case "coop":
+				game.WinnerID = ""
+			case "versus":
+				game.WinnerID = determineVersusWinner(game, "")
+			}
+			s.persistLaterLocked(game)
+		}
+
+		msgs := s.buildBroadcastMsgs(game)
+		game.mu.Unlock()
+		s.sendBroadcast(msgs)
+		go s.recordMove(matchID, c.ID, "reveal", openedCount)
+		return
+	}
+
 	if cell.Opened || cell.Flagged || cell.Inactive {
 		game.mu.Unlock()
 		return
